@@ -1,11 +1,11 @@
 /**
  * OSM Mappers Guild: same-site API gateway.
  *
- * Public URL: https://api.openacrossbase.net/api/...
+ * Public URL: https://guild-api.openacrossbase.net/api/...
  * Origin URL: https://armd-01.sakura.ne.jp/mappers-guild/api/...
  *
- * Bind this Worker to the custom domain api.openacrossbase.net in Cloudflare.
- * The origin remains on Sakura; browsers see a cookie for api.openacrossbase.net,
+ * Bind this Worker to the custom domain guild-api.openacrossbase.net in Cloudflare.
+ * The origin remains on Sakura; browsers see a cookie for guild-api.openacrossbase.net,
  * which is same-site with guild.openacrossbase.net.
  */
 const ORIGIN_BASE = 'https://armd-01.sakura.ne.jp/mappers-guild/api';
@@ -15,7 +15,7 @@ export default {
     const incoming = new URL(request.url);
 
     // Never proxy arbitrary hosts or arbitrary paths.
-    if (incoming.hostname !== 'api.openacrossbase.net' ||
+    if (incoming.hostname !== 'guild-api.openacrossbase.net' ||
         !/^\/api(?:\/|$)/.test(incoming.pathname)) {
       return new Response('Not found', { status: 404 });
     }
