@@ -299,7 +299,7 @@ function renderDetail() {
           ${changesetLinks(a.changeset_ids)}
           <div class="social-stat">いいね ${Number(a.like_count || 0)} 件
           ${me && a.status === 'approved' && a.user_id !== me.id && r.status !== 'withdrawn' ? `
-            <button class="btn btn-small" data-like-toggle="${a.id}" type="button">${a.liked_by_me ? 'いいねを取り消す' : 'いいね'}</button>` : ''}
+            <button class="btn btn-small" data-like-toggle="${a.id}" data-next-active="${a.liked_by_me ? 'false' : 'true'}" type="button">${a.liked_by_me ? 'いいねを取り消す' : 'いいね'}</button>` : ''}
           </div>
           ${isOwner && a.status === 'reported' ? `
             <div style="margin-top:8px">
@@ -365,7 +365,7 @@ function renderDetail() {
     btn.addEventListener('click', async () => {
       try {
         await api('/assignments/' + Number(btn.dataset.likeToggle) + '/like', {
-          method: 'POST', body: { active: btn.textContent.trim() === 'いいね' },
+          method: 'POST', body: { active: btn.dataset.nextActive === 'true' },
         });
         await openDetail(r.id);
       } catch (e) { toast(e.message); }
