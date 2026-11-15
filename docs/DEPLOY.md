@@ -2,7 +2,7 @@
 
 > **異なるサイト間のOAuthセッション問題:** GitHub Pages `guild.openacrossbase.net` とさくらAPIを直接接続すると、
 > Firefox等でCookieが分離され、ログイン成功後も `/me` が未ログインになる場合があります。
-> Cloudflare Workerで `api.openacrossbase.net` にAPIを公開する手順は
+> Cloudflare Workerで `guild-api.openacrossbase.net` にAPIを公開する手順は
 > [SAME_SITE_AUTH.md](SAME_SITE_AUTH.md) を参照してください。
 > **Worker・OSM OAuthのURL・PHP設定を切替える前に `frontend/config.js` を本番公開しないでください。**
 
