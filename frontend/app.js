@@ -227,6 +227,7 @@ function renderList() {
         <span>${esc(r.category)}</span>
         <span>依頼者: ${esc(r.owner_name)}</span>
         <span>参加 ${r.participant_count} 人</span>
+        <span>応援 ${Number(r.support_count || 0)} 人</span>
       </div>
       <p class="desc">${esc(r.description)}</p>
     </article>`).join('');
@@ -282,6 +283,7 @@ function renderDetail() {
       <span>更新: ${esc(r.updated_at)}</span>
     </div>
     <p>${esc(r.description)}</p>
+    <p class="social-stat">応援 ${Number(r.support_count || 0)} 人</p>
     ${r.reward_text ? `<p><strong>報酬・謝礼:</strong> ${esc(r.reward_text)}<br>
       <span class="hint" style="color:var(--muted);font-size:12px">※ 報酬の受け渡しは当事者間で行ってください。ギルドは決済・支払い保証・仲介を行いません。</span></p>` : ''}
     <div class="actions" id="detail-actions"></div>
@@ -295,6 +297,10 @@ function renderDetail() {
             <span class="badge badge-${esc(a.status)}">${esc(ASSIGNMENT_LABELS[a.status] || a.status)}</span>
           </div>
           ${changesetLinks(a.changeset_ids)}
+          <div class="social-stat">いいね ${Number(a.like_count || 0)} 件
+          ${me && a.status === 'approved' && a.user_id !== me.id && r.status !== 'withdrawn' ? `
+            <button class="btn btn-small" data-like-toggle="${a.id}" type="button">${a.liked_by_me ? 'いいねを取り消す' : 'いいね'}</button>` : ''}
+          </div>
           ${isOwner && a.status === 'reported' ? `
             <div style="margin-top:8px">
               <textarea id="review-comment-${a.id}" rows="2" style="width:100%" placeholder="確認コメント（任意）"></textarea>
@@ -338,6 +344,9 @@ function renderDetail() {
       btns += '<button id="act-leave" class="btn" type="button">参加を解除</button>';
     }
   }
+  if (me && !isOwner && r.status !== 'withdrawn') {
+    btns += `<button id="act-support" class="btn" type="button">${d.supported_by_me ? '応援を取り消す' : 'この依頼を応援'}</button>`;
+  }
   actions.innerHTML = btns;
 
   const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
@@ -345,6 +354,23 @@ function renderDetail() {
   on('act-leave', async () => { if (confirm('参加を解除しますか？')) await mutate('/requests/' + r.id + '/leave'); });
   on('act-withdraw', async () => { if (confirm('この依頼を取り下げますか？')) await mutate('/requests/' + r.id + '/withdraw'); });
   on('act-edit', () => openForm(r));
+  on('act-support', async () => {
+    try {
+      await api('/requests/' + r.id + '/support', { method: 'POST', body: { active: !d.supported_by_me } });
+      await openDetail(r.id);
+      loadRequests();
+    } catch (e) { toast(e.message); }
+  });
+  document.querySelectorAll('[data-like-toggle]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      try {
+        await api('/assignments/' + Number(btn.dataset.likeToggle) + '/like', {
+          method: 'POST', body: { active: btn.textContent.trim() === 'いいね' },
+        });
+        await openDetail(r.id);
+      } catch (e) { toast(e.message); }
+    });
+  });
 
   document.querySelectorAll('[data-review]').forEach((btn) => {
     btn.addEventListener('click', async () => {
