@@ -1,0 +1,12 @@
+# API設定（秘密情報を含むためコミットしない）
+api/config.php
+
+# 開発用DB・ログ
+*.sqlite
+*.sqlite-journal
+*.log
+
+# エディタ・OS
+.DS_Store
+.idea/
+.vscode/

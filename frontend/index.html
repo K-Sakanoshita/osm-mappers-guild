@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSM Mappers Guild | マッピング依頼とマッパーをつなぐ</title>
+<meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<header class="app-header">
+  <div class="brand">
+    <h1>OSM Mappers Guild</h1>
+    <p class="tagline">マッピング依頼とマッパーをつなぐ</p>
+  </div>
+  <div class="header-actions">
+    <span id="user-info" class="user-info"></span>
+    <button id="btn-new-request" class="btn btn-primary" type="button">依頼を投稿</button>
+    <button id="btn-login" class="btn" type="button">OSMでログイン</button>
+    <button id="btn-logout" class="btn" type="button" hidden>ログアウト</button>
+  </div>
+</header>
+
+<div id="dev-login" class="dev-login" hidden>
+  <strong>開発用ログイン</strong>（OSM OAuth未設定の環境でのみ表示されます）
+  <label>OSMユーザーID <input id="dev-osm-id" type="number" min="1" value="1001"></label>
+  <label>表示名 <input id="dev-name" type="text" value="テスト依頼者"></label>
+  <button id="btn-dev-login" class="btn" type="button">開発ログイン</button>
+</div>
+
+<main class="layout">
+  <aside class="sidebar">
+    <div class="filters">
+      <label>状態
+        <select id="filter-status">
+          <option value="">すべて</option>
+          <option value="open">募集中</option>
+          <option value="in_progress">作業中</option>
+          <option value="awaiting_review">確認待ち</option>
+          <option value="changes_requested">修正依頼</option>
+          <option value="completed">完了</option>
+          <option value="withdrawn">取り下げ</option>
+        </select>
+      </label>
+      <label>カテゴリ
+        <select id="filter-category"><option value="">すべて</option></select>
+      </label>
+      <div class="filter-buttons">
+        <button id="filter-all" class="btn btn-small" type="button">すべての依頼</button>
+        <button id="filter-mine" class="btn btn-small" type="button">自分の依頼</button>
+        <button id="filter-joining" class="btn btn-small" type="button">参加中</button>
+      </div>
+    </div>
+    <div id="request-list" class="request-list"></div>
+  </aside>
+  <section class="map-wrap">
+    <div id="map"></div>
+    <p class="map-note">地図データ: © OpenStreetMap contributors</p>
+  </section>
+</main>
+
+<div id="panel" class="panel" hidden>
+  <button id="panel-close" class="panel-close" type="button" aria-label="閉じる">×</button>
+  <div id="panel-content"></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
+<script src="./config.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

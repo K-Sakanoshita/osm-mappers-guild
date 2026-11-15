@@ -1,0 +1,11 @@
+# OSM Mappers Guild API (Apache)
+# /auth/callback などのパスを index.php へ集約する。
+RewriteEngine On
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# 設定ファイルへの直接アクセスを禁止
+<FilesMatch "^config\.php$">
+  Require all denied
+</FilesMatch>
