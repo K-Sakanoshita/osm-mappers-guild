@@ -26,6 +26,11 @@
 - 依頼者による確認・承認・修正依頼、履歴表示
 - 認可処理（他人の依頼の改変防止）、入力検証、CSRF・CORS 対策
 
+## クロスドメイン認証の注意
+
+GitHub PagesとさくらAPIを別サイトで直接接続すると、Cookie制限によりOSMログイン後も未ログインになる場合があります。
+**[Cloudflare Workerによる同一サイトAPI化](docs/SAME_SITE_AUTH.md)** に移行する場合は、WorkerとOAuth Redirect URI・PHP設定を先に整えてからフロントエンドを公開してください。
+
 ## はじめ方
 
 - ローカル開発: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
