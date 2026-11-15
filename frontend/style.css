@@ -120,3 +120,6 @@ body {
   .sidebar { border-right: none; border-top: 1px solid var(--border); order: 2; }
   .map-wrap { order: 1; }
 }
+
+.social-stat { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: 8px 0; }
+.social-stat .btn { margin-left: 4px; }
