@@ -3,5 +3,5 @@
 // 本番の例: 'https://armd-01.sakura.ne.jp/mappers-guild/api'
 // ローカル開発の例（PHP組み込みサーバでリポジトリルートを配信）: '/api/index.php'
 window.GUILD_CONFIG = {
-  apiBase: '/api/index.php',
+  apiBase: 'https://armd-01.sakura.ne.jp/mappers-guild/api',
 };
