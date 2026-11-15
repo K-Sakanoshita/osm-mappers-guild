@@ -26,7 +26,7 @@ return [
 
     // このAPIの公開URL（末尾スラッシュなし）。OAuthのリダイレクトURI生成に使う。
     // 別ドメインへのAPI直接アクセスではサードパーティCookie制限を受け得ます。
-    // 本番Cloudflare Worker利用時: 'https://api.openacrossbase.net/api'
+    // 本番Cloudflare Worker利用時: 'https://guild-api.openacrossbase.net/api'
     // 直接公開時: 'https://armd-01.sakura.ne.jp/mappers-guild/api'
     // null の場合はリクエストから推定する。
     'public_api_url' => null,
@@ -36,7 +36,7 @@ return [
     'osm_client_secret' => getenv('MG_OSM_CLIENT_SECRET') ?: '',
 
     // セッションCookieのSameSite。
-    // guild.openacrossbase.net と api.openacrossbase.net は別オリジンですが同一サイトなので 'Lax' を推奨。
+    // guild.openacrossbase.net と guild-api.openacrossbase.net は別オリジンですが同一サイトなので 'Lax' を推奨。
     // localhost と本番APIの通信は別サイトなので、サードパーティCookie制限を受ける点に注意。
     // 既定値は既存の直結環境との互換性のため 'None' のまま。
     'cookie_samesite' => 'None',
