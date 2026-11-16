@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS requests (
   reward_text  TEXT,
   area_geojson TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'open',
+  is_hidden    INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS assignments (
   request_id INTEGER NOT NULL REFERENCES requests (id) ON DELETE CASCADE,
   user_id    INTEGER NOT NULL REFERENCES users (id),
   status     TEXT NOT NULL DEFAULT 'joined',
+  report_kind TEXT NOT NULL DEFAULT 'edit',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   UNIQUE (request_id, user_id)
@@ -64,3 +66,31 @@ CREATE TABLE IF NOT EXISTS likes (
   UNIQUE (assignment_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_likes_user ON likes (user_id);
+
+-- Phase 1 hardening: no-edit reports and moderation (run AFTER 003_unify_likes)
+
+
+
+CREATE TABLE moderation_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id INTEGER NOT NULL REFERENCES requests (id) ON DELETE CASCADE,
+  reporter_user_id INTEGER NOT NULL REFERENCES users (id),
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by INTEGER REFERENCES users (id),
+  UNIQUE (request_id, reporter_user_id)
+);
+CREATE INDEX idx_moderation_status ON moderation_reports (status, created_at);
+
+CREATE TABLE moderation_actions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id INTEGER NOT NULL REFERENCES requests (id) ON DELETE CASCADE,
+  actor_user_id INTEGER NOT NULL REFERENCES users (id),
+  action TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX idx_moderation_actions_request ON moderation_actions (request_id, created_at);
+
