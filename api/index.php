@@ -211,7 +211,8 @@ function recompute_status(PDO $db, int $requestId): void
 function fetch_request(PDO $db, int $id): ?array
 {
     $stmt = $db->prepare(
-        'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id
+        'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id,
+                (SELECT COUNT(*) FROM request_supports rs WHERE rs.request_id = r.id) AS support_count
          FROM requests r JOIN users u ON u.id = r.user_id WHERE r.id = ?'
     );
     $stmt->execute([$id]);
@@ -228,6 +229,9 @@ function present_request(array $row): array
     $row['owner_osm_id'] = (int)$row['owner_osm_id'];
     if (isset($row['participant_count'])) {
         $row['participant_count'] = (int)$row['participant_count'];
+    }
+    if (isset($row['support_count'])) {
+        $row['support_count'] = (int)$row['support_count'];
     }
     return $row;
 }
@@ -440,7 +444,8 @@ function route(PDO $db, array $config, string $method, string $route): void
             }
         }
         $sql = 'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id,
-                       (SELECT COUNT(*) FROM assignments a WHERE a.request_id = r.id) AS participant_count
+                       (SELECT COUNT(*) FROM assignments a WHERE a.request_id = r.id) AS participant_count,
+                       (SELECT COUNT(*) FROM request_supports rs WHERE rs.request_id = r.id) AS support_count
                 FROM requests r JOIN users u ON u.id = r.user_id';
         if ($where) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
@@ -496,13 +501,23 @@ function route(PDO $db, array $config, string $method, string $route): void
             );
             $stmt->execute([$id]);
             $assignments = $stmt->fetchAll();
+            $viewer = current_user($db);
             $csStmt = $db->prepare('SELECT changeset_id FROM assignment_changesets WHERE assignment_id = ? ORDER BY changeset_id ASC');
+            $likeCountStmt = $db->prepare('SELECT COUNT(*) FROM assignment_likes WHERE assignment_id = ?');
+            $myLikeStmt = $db->prepare('SELECT 1 FROM assignment_likes WHERE assignment_id = ? AND user_id = ?');
             foreach ($assignments as &$a) {
                 $csStmt->execute([$a['id']]);
                 $a['changeset_ids'] = array_map('intval', array_column($csStmt->fetchAll(), 'changeset_id'));
                 $a['id'] = (int)$a['id'];
                 $a['user_id'] = (int)$a['user_id'];
                 $a['user_osm_id'] = (int)$a['user_osm_id'];
+                $likeCountStmt->execute([$a['id']]);
+                $a['like_count'] = (int)$likeCountStmt->fetchColumn();
+                $a['liked_by_me'] = false;
+                if ($viewer) {
+                    $myLikeStmt->execute([$a['id'], $viewer['id']]);
+                    $a['liked_by_me'] = (bool)$myLikeStmt->fetchColumn();
+                }
             }
             unset($a);
             $stmt = $db->prepare(
@@ -511,10 +526,18 @@ function route(PDO $db, array $config, string $method, string $route): void
                  WHERE e.request_id = ? ORDER BY e.created_at DESC, e.id DESC LIMIT 100'
             );
             $stmt->execute([$id]);
+            $events = $stmt->fetchAll();
+            $supportedByMe = false;
+            if ($viewer) {
+                $supportStmt = $db->prepare('SELECT 1 FROM request_supports WHERE request_id = ? AND user_id = ?');
+                $supportStmt->execute([$id, $viewer['id']]);
+                $supportedByMe = (bool)$supportStmt->fetchColumn();
+            }
             out([
                 'request' => present_request($req),
                 'assignments' => $assignments,
-                'events' => $stmt->fetchAll(),
+                'events' => $events,
+                'supported_by_me' => $supportedByMe,
             ]);
         }
         if ($method === 'PATCH') {
@@ -579,6 +602,75 @@ function route(PDO $db, array $config, string $method, string $route): void
             log_event($db, $id, null, (int)$me['id'], 'edit', null);
             out(['request' => present_request(fetch_request($db, $id))]);
         }
+    }
+
+    // Phase 2: 依頼への応援（同じユーザーは1件につき1回、ON/OFFは冪等）
+    if (preg_match('#^/requests/(\d+)/support$#', $route, $m) && $method === 'POST') {
+        $me = require_login($db);
+        require_csrf();
+        $id = (int)$m[1];
+        $req = fetch_request($db, $id);
+        if (!$req) {
+            fail(404, '依頼が見つかりません');
+        }
+        $b = body_json();
+        if (!isset($b['active']) || !is_bool($b['active'])) {
+            fail(400, 'active は真偽値で指定してください');
+        }
+        if ((int)$req['user_id'] === (int)$me['id']) {
+            fail(403, '自分の依頼には応援を付けられません');
+        }
+        if ($b['active'] && $req['status'] === 'withdrawn') {
+            fail(409, '取り下げ済みの依頼には応援できません');
+        }
+        if ($b['active']) {
+            $insertSql = str_starts_with($config['db_dsn'], 'sqlite:')
+                ? 'INSERT OR IGNORE INTO request_supports (request_id, user_id, created_at) VALUES (?, ?, ?)'
+                : 'INSERT IGNORE INTO request_supports (request_id, user_id, created_at) VALUES (?, ?, ?)';
+            $db->prepare($insertSql)->execute([$id, $me['id'], now()]);
+        } else {
+            $db->prepare('DELETE FROM request_supports WHERE request_id = ? AND user_id = ?')->execute([$id, $me['id']]);
+        }
+        $stmt = $db->prepare('SELECT COUNT(*) FROM request_supports WHERE request_id = ?');
+        $stmt->execute([$id]);
+        out(['support_count' => (int)$stmt->fetchColumn(), 'supported_by_me' => $b['active']]);
+    }
+
+    // Phase 2: 承認済み成果へのいいね（自己評価は禁止）
+    if (preg_match('#^/assignments/(\d+)/like$#', $route, $m) && $method === 'POST') {
+        $me = require_login($db);
+        require_csrf();
+        $id = (int)$m[1];
+        $stmt = $db->prepare(
+            'SELECT a.id, a.user_id, a.status, r.status AS request_status
+             FROM assignments a JOIN requests r ON r.id = a.request_id WHERE a.id = ?'
+        );
+        $stmt->execute([$id]);
+        $assignment = $stmt->fetch();
+        if (!$assignment) {
+            fail(404, '成果が見つかりません');
+        }
+        if ((int)$assignment['user_id'] === (int)$me['id']) {
+            fail(403, '自分の成果にはいいねできません');
+        }
+        $b = body_json();
+        if (!isset($b['active']) || !is_bool($b['active'])) {
+            fail(400, 'active は真偽値で指定してください');
+        }
+        if ($b['active'] && ($assignment['status'] !== 'approved' || $assignment['request_status'] === 'withdrawn')) {
+            fail(409, '承認済みの成果にのみいいねできます');
+        }
+        if ($b['active']) {
+            $insertSql = str_starts_with($config['db_dsn'], 'sqlite:')
+                ? 'INSERT OR IGNORE INTO assignment_likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)'
+                : 'INSERT IGNORE INTO assignment_likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)';
+            $db->prepare($insertSql)->execute([$id, $me['id'], now()]);
+        } else {
+            $db->prepare('DELETE FROM assignment_likes WHERE assignment_id = ? AND user_id = ?')->execute([$id, $me['id']]);
+        }
+        $stmt = $db->prepare('SELECT COUNT(*) FROM assignment_likes WHERE assignment_id = ?');
+        $stmt->execute([$id]);
+        out(['like_count' => (int)$stmt->fetchColumn(), 'liked_by_me' => $b['active']]);
     }
 
     if (preg_match('#^/requests/(\d+)/(withdraw|join|leave|report|review)$#', $route, $m) && $method === 'POST') {

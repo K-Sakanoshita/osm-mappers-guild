@@ -31,6 +31,14 @@
 GitHub PagesとさくらAPIを別サイトで直接接続すると、Cookie制限によりOSMログイン後も未ログインになる場合があります。
 **[Cloudflare Workerによる同一サイトAPI化](docs/SAME_SITE_AUTH.md)** に移行する場合は、WorkerとOAuth Redirect URI・PHP設定を先に整えてからフロントエンドを公開してください。
 
+## Phase 2（今回の追加機能）
+
+- 依頼ごとの「応援」（ログインユーザーにつき1回、解除可能）
+- 依頼者が承認したマッパーの成果ごとの「いいね」（ログインユーザーにつき1回、解除可能）
+- デイリークエストは今後の開発段階。今回の変更には含めない
+
+既存DBへの適用では `db/migrations/002_support_likes.mysql.sql` が必要です。**API公開より先にマイグレーションを実行**してください。
+
 ## はじめ方
 
 - ローカル開発: [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)

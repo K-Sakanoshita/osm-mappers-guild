@@ -59,3 +59,41 @@
 
 - 報酬・謝礼は当事者間の扱いであり、ギルドは決済・支払い保証・仲介を行いません（画面にも明記しています）。
 - `config.php` や DB パスワード、OAuth シークレットをリポジトリにコミットしないでください。
+
+
+## Phase 2: 応援・いいねを追加する場合
+
+**既存DBは再作成せず、次の追加マイグレーションを実行してください。**
+
+- MySQL（本番）: `db/migrations/002_support_likes.mysql.sql`
+- SQLite（開発）: `db/migrations/002_support_likes.sqlite.sql`
+
+例（MySQL CLIを利用できる場合）:
+
+```bash
+mysql -h YOUR_DB_HOST -u YOUR_DB_USER -p YOUR_DB_NAME < db/migrations/002_support_likes.mysql.sql
+```
+
+さくらのphpMyAdminからSQLファイルをインポートしても構いません。既存の `users`、`requests`、`assignments` データはそのまま残ります。
+
+**重要：必ずDBマイグレーションを先に適用してから、新しい `api/index.php` を公開してください。** 新APIは依頼一覧・詳細の取得でも新テーブルを参照するため、順序を逆にすると旧画面を含めてAPIが500エラーになります。
+
+### 新API
+
+- `POST /requests/{id}/support` — `{"active":true}` で応援、`false` で解除。本人の依頼は応援不可
+- `POST /assignments/{id}/like` — 承認済み成果にいいね、`false` で解除。本人の成果はいいね不可
+- `GET /requests` — `support_count` を追加
+- `GET /requests/{id}` — `supported_by_me`、各参加者の `like_count` / `liked_by_me` を追加
+
+POSTはログインと `X-CSRF-Token` が必要です。同じユーザーが同じ対象を繰り返しONにしても1件として計上します。ログインしていない利用者は件数を閲覧できます。
+
+### 確認手順
+
+1. MySQLへマイグレーションを適用し、新APIを配置
+2. 新フロントをGitHub Pagesで公開
+3. 他人が投稿した依頼を応援し、カウントが増えることを確認
+4. 応援の解除と重複防止を確認
+5. 依頼者がマッパーの成果を承認し、その成果へのいいね・取り消しを確認
+6. 未ログイン時は件数のみ表示、本人の依頼・成果にはいいねできないことを確認
+
+テスト環境では `python3 tests/smoke_test.py` を再実行します。
