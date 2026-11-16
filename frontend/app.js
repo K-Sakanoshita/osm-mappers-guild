@@ -235,7 +235,7 @@ function renderList() {
         <span>${esc(r.category)}</span>
         <span>依頼者: ${esc(r.owner_name)}</span>
         <span>参加 ${r.participant_count} 人</span>
-        <span>応援 ${Number(r.support_count || 0)} 人</span>
+        <span>依頼へのいいね ${Number(r.support_count || 0)} 件</span>
       </div>
       <p class="desc">${esc(r.description)}</p>
     </article>`).join('');
@@ -303,7 +303,7 @@ function renderDetail() {
       <span>更新: ${esc(r.updated_at)}</span>
     </div>
     <p>${esc(r.description)}</p>
-    <p class="social-stat">応援 <span id="support-count">${Number(r.support_count || 0)}</span> 人</p>
+    <p class="social-stat">依頼へのいいね <span id="support-count">${Number(r.support_count || 0)}</span> 件</p>
     ${r.reward_text ? `<p><strong>報酬・謝礼:</strong> ${esc(r.reward_text)}<br>
       <span class="hint" style="color:var(--muted);font-size:12px">※ 報酬の受け渡しは当事者間で行ってください。ギルドは決済・支払い保証・仲介を行いません。</span></p>` : ''}
     <div class="actions" id="detail-actions"></div>
@@ -362,7 +362,7 @@ function renderDetail() {
     }
   }
   if (me && !isOwner && (d.supported_by_me || r.status !== 'withdrawn')) {
-    btns += `<button id="act-support" class="btn" type="button">${d.supported_by_me ? '応援を取り消す' : 'この依頼を応援'}</button>`;
+    btns += `<button id="act-support" class="btn" type="button">${d.supported_by_me ? '依頼へのいいねを取り消す' : '依頼にいいね'}</button>`;
   }
   actions.innerHTML = btns;
 
@@ -380,7 +380,7 @@ function renderDetail() {
         d.supported_by_me = result.supported_by_me;
         r.support_count = result.support_count;
         $('support-count').textContent = result.support_count;
-        button.textContent = result.supported_by_me ? '応援を取り消す' : 'この依頼を応援';
+        button.textContent = result.supported_by_me ? '依頼へのいいねを取り消す' : '依頼にいいね';
         if (!result.supported_by_me && r.status === 'withdrawn') button.remove();
       }
       loadRequests();

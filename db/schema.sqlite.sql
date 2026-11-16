@@ -53,19 +53,14 @@ CREATE TABLE IF NOT EXISTS review_events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_request ON review_events (request_id, created_at);
 
--- Phase 2: 依頼への応援と承認済み成果へのいいね
-CREATE TABLE IF NOT EXISTS request_supports (
-  request_id INTEGER NOT NULL REFERENCES requests (id) ON DELETE CASCADE,
+-- 依頼または成果へのいいね（いずれか一方のみ指定）
+CREATE TABLE IF NOT EXISTS likes (
+  request_id INTEGER REFERENCES requests (id) ON DELETE CASCADE,
+  assignment_id INTEGER REFERENCES assignments (id) ON DELETE CASCADE,
   user_id INTEGER NOT NULL REFERENCES users (id),
   created_at TEXT NOT NULL,
-  PRIMARY KEY (request_id, user_id)
+  CHECK ((request_id IS NOT NULL) <> (assignment_id IS NOT NULL)),
+  UNIQUE (request_id, user_id),
+  UNIQUE (assignment_id, user_id)
 );
-CREATE INDEX IF NOT EXISTS idx_request_supports_user ON request_supports (user_id);
-
-CREATE TABLE IF NOT EXISTS assignment_likes (
-  assignment_id INTEGER NOT NULL REFERENCES assignments (id) ON DELETE CASCADE,
-  user_id INTEGER NOT NULL REFERENCES users (id),
-  created_at TEXT NOT NULL,
-  PRIMARY KEY (assignment_id, user_id)
-);
-CREATE INDEX IF NOT EXISTS idx_assignment_likes_user ON assignment_likes (user_id);
+CREATE INDEX IF NOT EXISTS idx_likes_user ON likes (user_id);

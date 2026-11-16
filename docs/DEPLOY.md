@@ -61,26 +61,26 @@
 - `config.php` や DB パスワード、OAuth シークレットをリポジトリにコミットしないでください。
 
 
-## Phase 2: 応援・いいねを追加する場合
+## Phase 2: 依頼・成果へのいいねを追加する場合
 
-**既存DBは再作成せず、次の追加マイグレーションを実行してください。**
+**既存DBは再作成しないでください。** Phase 2 の旧テーブルがある既存DBでは、DBをバックアップし、旧APIのいいね操作を停止してから、次の移行を一度実行してください。
 
-- MySQL（本番）: `db/migrations/002_support_likes.mysql.sql`
-- SQLite（開発）: `db/migrations/002_support_likes.sqlite.sql`
+- MySQL（本番）: `db/migrations/003_unify_likes.mysql.sql`
+- SQLite（開発）: `db/migrations/003_unify_likes.sqlite.sql`
 
 例（MySQL CLIを利用できる場合）:
 
 ```bash
-mysql -h YOUR_DB_HOST -u YOUR_DB_USER -p YOUR_DB_NAME < db/migrations/002_support_likes.mysql.sql
+mysql -h YOUR_DB_HOST -u YOUR_DB_USER -p YOUR_DB_NAME < db/migrations/003_unify_likes.mysql.sql
 ```
 
-さくらのphpMyAdminからSQLファイルをインポートしても構いません。既存の `users`、`requests`、`assignments` データはそのまま残ります。
+さくらのphpMyAdminからSQLファイルをインポートしても構いません。依頼・成果へのいいねと作成日時を `likes` にコピーし、旧テーブルも残します。旧 Phase 1 DB の場合は先に `002_support_likes` を適用してください。新規インストールは最新のスキーマのみで構いません。
 
-**重要：必ずDBマイグレーションを先に適用してから、新しい `api/index.php` を公開してください。** 新APIは依頼一覧・詳細の取得でも新テーブルを参照するため、順序を逆にすると旧画面を含めてAPIが500エラーになります。
+**重要：旧APIのいいね操作を停止した状態で移行し、新しい `api/index.php` を配置してから再開してください。** コピー後に旧APIが書き込むと、その変更は新テーブルに反映されません。新APIへの切り替え後に移行SQLを再実行すると、解除済みのいいねが復活するため、再実行しないでください。新APIは依頼一覧・詳細でも新テーブルを参照するため、DBより先に公開するとエラーになります。
 
 ### 新API
 
-- `POST /requests/{id}/support` — `{"active":true}` で応援、`false` で解除。本人の依頼は応援不可
+- `POST /requests/{id}/support` — `{"active":true}` で依頼にいいね、`false` で解除。本人の依頼には不可
 - `POST /assignments/{id}/like` — 承認済み成果にいいね、`false` で解除。本人の成果はいいね不可
 - `GET /requests` — `support_count` を追加
 - `GET /requests/{id}` — `supported_by_me`、各参加者の `like_count` / `liked_by_me` を追加
@@ -91,8 +91,8 @@ POSTはログインと `X-CSRF-Token` が必要です。同じユーザーが同
 
 1. MySQLへマイグレーションを適用し、新APIを配置
 2. 新フロントをGitHub Pagesで公開
-3. 他人が投稿した依頼を応援し、カウントが増えることを確認
-4. 応援の解除と重複防止を確認
+3. 他人が投稿した依頼にいいねし、カウントが増えることを確認
+4. 依頼へのいいねの解除と重複防止を確認
 5. 依頼者がマッパーの成果を承認し、その成果へのいいね・取り消しを確認
 6. 未ログイン時は件数のみ表示、本人の依頼・成果にはいいねできないことを確認
 

@@ -212,7 +212,7 @@ function fetch_request(PDO $db, int $id): ?array
 {
     $stmt = $db->prepare(
         'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id,
-                (SELECT COUNT(*) FROM request_supports rs WHERE rs.request_id = r.id) AS support_count
+                (SELECT COUNT(*) FROM likes rs WHERE rs.request_id = r.id) AS support_count
          FROM requests r JOIN users u ON u.id = r.user_id WHERE r.id = ?'
     );
     $stmt->execute([$id]);
@@ -445,7 +445,7 @@ function route(PDO $db, array $config, string $method, string $route): void
         }
         $sql = 'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id,
                        (SELECT COUNT(*) FROM assignments a WHERE a.request_id = r.id) AS participant_count,
-                       (SELECT COUNT(*) FROM request_supports rs WHERE rs.request_id = r.id) AS support_count
+                       (SELECT COUNT(*) FROM likes rs WHERE rs.request_id = r.id) AS support_count
                 FROM requests r JOIN users u ON u.id = r.user_id';
         if ($where) {
             $sql .= ' WHERE ' . implode(' AND ', $where);
@@ -503,8 +503,8 @@ function route(PDO $db, array $config, string $method, string $route): void
             $assignments = $stmt->fetchAll();
             $viewer = current_user($db);
             $csStmt = $db->prepare('SELECT changeset_id FROM assignment_changesets WHERE assignment_id = ? ORDER BY changeset_id ASC');
-            $likeCountStmt = $db->prepare('SELECT COUNT(*) FROM assignment_likes WHERE assignment_id = ?');
-            $myLikeStmt = $db->prepare('SELECT 1 FROM assignment_likes WHERE assignment_id = ? AND user_id = ?');
+            $likeCountStmt = $db->prepare('SELECT COUNT(*) FROM likes WHERE assignment_id = ?');
+            $myLikeStmt = $db->prepare('SELECT 1 FROM likes WHERE assignment_id = ? AND user_id = ?');
             foreach ($assignments as &$a) {
                 $csStmt->execute([$a['id']]);
                 $a['changeset_ids'] = array_map('intval', array_column($csStmt->fetchAll(), 'changeset_id'));
@@ -529,7 +529,7 @@ function route(PDO $db, array $config, string $method, string $route): void
             $events = $stmt->fetchAll();
             $supportedByMe = false;
             if ($viewer) {
-                $supportStmt = $db->prepare('SELECT 1 FROM request_supports WHERE request_id = ? AND user_id = ?');
+                $supportStmt = $db->prepare('SELECT 1 FROM likes WHERE request_id = ? AND user_id = ?');
                 $supportStmt->execute([$id, $viewer['id']]);
                 $supportedByMe = (bool)$supportStmt->fetchColumn();
             }
@@ -604,7 +604,7 @@ function route(PDO $db, array $config, string $method, string $route): void
         }
     }
 
-    // Phase 2: 依頼への応援（同じユーザーは1件につき1回、ON/OFFは冪等）
+    // 依頼へのいいね（同じユーザーは1件につき1回、ON/OFFは冪等）
     if (preg_match('#^/requests/(\d+)/support$#', $route, $m) && $method === 'POST') {
         $me = require_login($db);
         require_csrf();
@@ -618,20 +618,20 @@ function route(PDO $db, array $config, string $method, string $route): void
             fail(400, 'active は真偽値で指定してください');
         }
         if ((int)$req['user_id'] === (int)$me['id']) {
-            fail(403, '自分の依頼には応援を付けられません');
+            fail(403, '自分の依頼にはいいねできません');
         }
         if ($b['active'] && $req['status'] === 'withdrawn') {
-            fail(409, '取り下げ済みの依頼には応援できません');
+            fail(409, '取り下げ済みの依頼にはいいねできません');
         }
         if ($b['active']) {
             $insertSql = str_starts_with($config['db_dsn'], 'sqlite:')
-                ? 'INSERT OR IGNORE INTO request_supports (request_id, user_id, created_at) VALUES (?, ?, ?)'
-                : 'INSERT IGNORE INTO request_supports (request_id, user_id, created_at) VALUES (?, ?, ?)';
+                ? 'INSERT OR IGNORE INTO likes (request_id, user_id, created_at) VALUES (?, ?, ?)'
+                : 'INSERT IGNORE INTO likes (request_id, user_id, created_at) VALUES (?, ?, ?)';
             $db->prepare($insertSql)->execute([$id, $me['id'], now()]);
         } else {
-            $db->prepare('DELETE FROM request_supports WHERE request_id = ? AND user_id = ?')->execute([$id, $me['id']]);
+            $db->prepare('DELETE FROM likes WHERE request_id = ? AND user_id = ?')->execute([$id, $me['id']]);
         }
-        $stmt = $db->prepare('SELECT COUNT(*) FROM request_supports WHERE request_id = ?');
+        $stmt = $db->prepare('SELECT COUNT(*) FROM likes WHERE request_id = ?');
         $stmt->execute([$id]);
         out(['support_count' => (int)$stmt->fetchColumn(), 'supported_by_me' => $b['active']]);
     }
@@ -662,13 +662,13 @@ function route(PDO $db, array $config, string $method, string $route): void
         }
         if ($b['active']) {
             $insertSql = str_starts_with($config['db_dsn'], 'sqlite:')
-                ? 'INSERT OR IGNORE INTO assignment_likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)'
-                : 'INSERT IGNORE INTO assignment_likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)';
+                ? 'INSERT OR IGNORE INTO likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)'
+                : 'INSERT IGNORE INTO likes (assignment_id, user_id, created_at) VALUES (?, ?, ?)';
             $db->prepare($insertSql)->execute([$id, $me['id'], now()]);
         } else {
-            $db->prepare('DELETE FROM assignment_likes WHERE assignment_id = ? AND user_id = ?')->execute([$id, $me['id']]);
+            $db->prepare('DELETE FROM likes WHERE assignment_id = ? AND user_id = ?')->execute([$id, $me['id']]);
         }
-        $stmt = $db->prepare('SELECT COUNT(*) FROM assignment_likes WHERE assignment_id = ?');
+        $stmt = $db->prepare('SELECT COUNT(*) FROM likes WHERE assignment_id = ?');
         $stmt->execute([$id]);
         out(['like_count' => (int)$stmt->fetchColumn(), 'liked_by_me' => $b['active']]);
     }

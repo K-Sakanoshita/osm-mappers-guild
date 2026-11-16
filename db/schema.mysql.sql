@@ -65,23 +65,17 @@ CREATE TABLE IF NOT EXISTS review_events (
   CONSTRAINT fk_events_actor FOREIGN KEY (actor_user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Phase 2: 依頼への応援と承認済み成果へのいいね
-CREATE TABLE IF NOT EXISTS request_supports (
-  request_id BIGINT UNSIGNED NOT NULL,
+-- 依頼または成果へのいいね（いずれか一方のみ指定）
+CREATE TABLE IF NOT EXISTS likes (
+  request_id BIGINT UNSIGNED NULL,
+  assignment_id BIGINT UNSIGNED NULL,
   user_id BIGINT UNSIGNED NOT NULL,
   created_at DATETIME NOT NULL,
-  PRIMARY KEY (request_id, user_id),
-  KEY idx_request_supports_user (user_id),
-  CONSTRAINT fk_supports_request FOREIGN KEY (request_id) REFERENCES requests (id) ON DELETE CASCADE,
-  CONSTRAINT fk_supports_user FOREIGN KEY (user_id) REFERENCES users (id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE IF NOT EXISTS assignment_likes (
-  assignment_id BIGINT UNSIGNED NOT NULL,
-  user_id BIGINT UNSIGNED NOT NULL,
-  created_at DATETIME NOT NULL,
-  PRIMARY KEY (assignment_id, user_id),
-  KEY idx_assignment_likes_user (user_id),
-  CONSTRAINT fk_likes_assignment FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
-  CONSTRAINT fk_likes_user FOREIGN KEY (user_id) REFERENCES users (id)
+  CONSTRAINT chk_likes_target CHECK ((request_id IS NOT NULL) <> (assignment_id IS NOT NULL)),
+  UNIQUE KEY uq_likes_request_user (request_id, user_id),
+  UNIQUE KEY uq_likes_assignment_user (assignment_id, user_id),
+  KEY idx_likes_user (user_id),
+  CONSTRAINT fk_unified_likes_request FOREIGN KEY (request_id) REFERENCES requests (id) ON DELETE CASCADE,
+  CONSTRAINT fk_unified_likes_assignment FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
+  CONSTRAINT fk_unified_likes_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

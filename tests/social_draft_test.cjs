@@ -15,8 +15,8 @@ vm.createContext(context); vm.runInContext(fs.readFileSync('frontend/app.js','ut
   el('report-comment').value='入力中の内容';
   const pending=el('act-support').click(); resolvePost(); await pending;
   assert.equal(el('report-comment').value,'入力中の内容'); assert.equal(el('support-count').textContent,1);
-  assert.equal(el('act-support').textContent,'応援を取り消す');
+  assert.equal(el('act-support').textContent,'依頼へのいいねを取り消す');
   const late=el('act-support').click(); el('act-support').isConnected=false; el('support-count').textContent='別画面'; resolvePost(); await late;
   assert.equal(el('support-count').textContent,'別画面');
-  console.log('応援中の入力保持と画面遷移後の応答: OK');
+  console.log('いいね中の入力保持と画面遷移後の応答: OK');
 })().catch(e=>{console.error(e); process.exitCode=1});
