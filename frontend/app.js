@@ -274,6 +274,18 @@ function changesetLinks(ids) {
   ).join(', ') + '</div>';
 }
 
+function changesetSearchUrl(userId, area) {
+  const points = area.coordinates[0];
+  const lngs = points.map((point) => point[0]);
+  const lats = points.map((point) => point[1]);
+  const params = new URLSearchParams({
+    user: String(userId),
+    bbox: [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)].join(','),
+    limit: '100',
+  });
+  return 'https://api.openstreetmap.org/api/0.6/changesets.json?' + params;
+}
+
 function renderDetail() {
   const d = state.detail;
   if (!d) return;
@@ -338,17 +350,14 @@ function renderDetail() {
   let btns = '';
   if (!me) {
     btns = '<p>参加・報告にはログインが必要です。</p>';
-  } else if (isOwner) {
-    if (r.status !== 'withdrawn') {
+  } else {
+    if (isOwner && r.status !== 'withdrawn') {
       btns += '<button id="act-edit" class="btn" type="button">編集</button>';
       btns += '<button id="act-withdraw" class="btn btn-danger" type="button">取り下げ</button>';
     }
-  } else if (!myAssignment) {
-    if (!['completed', 'withdrawn'].includes(r.status)) {
+    if (!myAssignment && !['completed', 'withdrawn'].includes(r.status)) {
       btns += '<button id="act-join" class="btn btn-primary" type="button">参加する</button>';
-    }
-  } else {
-    if (['joined', 'changes_requested'].includes(myAssignment.status)) {
+    } else if (myAssignment && ['joined', 'changes_requested'].includes(myAssignment.status)) {
       btns += '<button id="act-leave" class="btn" type="button">参加を解除</button>';
     }
   }
@@ -418,22 +427,59 @@ function renderDetail() {
         <label>報告コメント
           <textarea id="report-comment" rows="4" required maxlength="2000" placeholder="実施した内容、現地確認の結果など"></textarea>
         </label>
-        <label>Changeset ID（必須、複数可、カンマ区切り）
-          <input id="report-changesets" type="text" required placeholder="例: 123456789, 123456790">
-          <span class="hint">OSMで編集したChangesetのIDを入力してください。</span>
-        </label>
+        <div class="changeset-picker">
+          <strong>Changeset（必須、複数選択可）</strong>
+          <p class="hint">対象エリアと重なるあなたの Changeset を取得します。依頼に関係するものを選んでください。</p>
+          <button id="report-fetch-changesets" class="btn btn-small" type="button">Changeset を取得</button>
+          <div id="report-changeset-list" aria-live="polite"></div>
+        </div>
         <p class="error-text" id="report-error"></p>
         <button class="btn btn-primary" type="submit">報告する</button>
       </form>`;
+    const selectedChangesets = new Set();
+    $('report-fetch-changesets').addEventListener('click', async () => {
+      const button = $('report-fetch-changesets');
+      const list = $('report-changeset-list');
+      button.disabled = true;
+      selectedChangesets.clear();
+      list.textContent = '取得しています…';
+      try {
+        const response = await fetch(changesetSearchUrl(me.osm_user_id, r.area));
+        if (!response.ok) throw new Error('OSM API の応答: HTTP ' + response.status);
+        const data = await response.json();
+        if (!Array.isArray(data.changesets)) throw new Error('OSM API の応答形式が正しくありません');
+        const changesets = data.changesets.filter((cs) => Number.isSafeInteger(cs.id) && cs.id > 0 && cs.changes_count > 0);
+        if (!changesets.length) {
+          list.textContent = '対象エリアに該当する Changeset が見つかりませんでした。';
+          return;
+        }
+        list.innerHTML = changesets.map((cs) => {
+          const date = new Date(cs.created_at);
+          const when = Number.isNaN(date.getTime()) ? cs.created_at || '' : date.toLocaleString('ja-JP');
+          const comment = cs.tags && cs.tags.comment ? cs.tags.comment : 'コメントなし';
+          return `<label class="changeset-option"><input type="checkbox" value="${cs.id}" ${selectedChangesets.has(cs.id) ? 'checked' : ''}>
+            <span><strong>#${cs.id}</strong> ${esc(when)}<br>${esc(comment)}</span></label>`;
+        }).join('') + (data.changesets.length >= 100 ? '<p class="hint">最新の100件を表示しています。</p>' : '');
+        list.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+          checkbox.addEventListener('change', () => {
+            const id = Number(checkbox.value);
+            if (checkbox.checked) selectedChangesets.add(id);
+            else selectedChangesets.delete(id);
+          });
+        });
+      } catch (e) {
+        list.textContent = '取得できませんでした。時間をおいて再度お試しください。（' + e.message + '）';
+      } finally {
+        button.disabled = false;
+      }
+    });
     $('report-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      const raw = $('report-changesets').value.trim();
-      const parts = raw.split(/[,\s]+/).filter(Boolean);
-      if (parts.length === 0 || parts.length > 50 || parts.some((part) => !/^[1-9]\d*$/.test(part) || !Number.isSafeInteger(Number(part)))) {
-        $('report-error').textContent = 'Changeset ID は正の整数で1〜50件指定してください';
+      if (selectedChangesets.size === 0 || selectedChangesets.size > 50) {
+        $('report-error').textContent = 'Changeset を1〜50件選んでください';
         return;
       }
-      const ids = parts.map(Number);
+      const ids = Array.from(selectedChangesets);
       try {
         await api('/requests/' + r.id + '/report', {
           method: 'POST',

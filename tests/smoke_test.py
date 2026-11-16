@@ -95,8 +95,6 @@ check("dev-login B", s == 200, str(d))
 s, d = call(B, "GET", "/me"); csrfB = d["csrf_token"]
 
 # --- 参加フロー
-s, d = call(A, "POST", f"/requests/{req_id}/join", {}, csrfA)
-check("owner join own -> 400", s == 400, str(s))
 s, d = call(B, "POST", f"/requests/{req_id}/join", {}, csrfB)
 check("B join", s == 200 and d["request"]["status"] == "in_progress", str(d))
 s, d = call(B, "POST", f"/requests/{req_id}/join", {}, csrfB)
@@ -141,6 +139,20 @@ check("detail events include report/approve",
       any(e["event_type"] == "report" for e in d["events"]) and any(e["event_type"] == "approve" for e in d["events"]), str([e["event_type"] for e in d["events"]]))
 check("detail changesets merged", d["assignments"][0]["changeset_ids"] == [123456, 123457, 123999], str(d["assignments"][0]["changeset_ids"]))
 check("assignment approved", d["assignments"][0]["status"] == "approved", str(d["assignments"][0]))
+
+s, d = call(A, "POST", f"/requests/{req2_id}/join", {}, csrfA)
+check("owner can join own request", s == 200, str(d))
+s, d = call(A, "POST", f"/requests/{req2_id}/join", {}, csrfA)
+check("owner cannot join twice", s == 409, str(d))
+s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": []}, csrfA)
+check("owner report requires changeset", s == 400, str(d))
+s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": [123456]}, csrfA)
+check("owner can report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
+s, d = call(A, "GET", f"/requests/{req2_id}")
+owner_assignment = next(a for a in d["assignments"] if a["user_osm_id"] == 1001)
+check("owner report saves changeset", owner_assignment["changeset_ids"] == [123456], str(owner_assignment))
+s, d = call(A, "POST", f"/requests/{req2_id}/review", {"assignment_id": owner_assignment["id"], "action": "approve"}, csrfA)
+check("owner can approve own report", s == 200, str(d))
 
 s, d = call(B, "PATCH", f"/requests/{req2_id}", {"title": "乗っ取り"}, csrfB)
 check("non-owner edit -> 403", s == 403, str(s))
@@ -191,7 +203,7 @@ check("like count public and viewer false", s == 200 and d["assignments"][0]["li
 s, d = call(A, "POST", f"/assignments/{aid}/like", {"active": False}, csrfA)
 check("remove like", s == 200 and d.get("like_count") == 0 and d.get("liked_by_me") is False, str(d))
 s, d = call(A, "GET", f"/requests/{req2_id}")
-pending_aid = d["assignments"][0]["id"]
+pending_aid = next(a["id"] for a in d["assignments"] if a["user_osm_id"] == 2002)
 s, d = call(A, "POST", f"/assignments/{pending_aid}/like", {"active": True}, csrfA)
 check("cannot like unapproved work -> 409", s == 409, str(d))
 

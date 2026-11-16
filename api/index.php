@@ -703,9 +703,6 @@ function route(PDO $db, array $config, string $method, string $route): void
         }
 
         if ($action === 'join') {
-            if ($isOwner) {
-                fail(400, '自分の依頼には参加表明できません');
-            }
             if (in_array($req['status'], ['completed', 'withdrawn'], true)) {
                 fail(409, 'この依頼は参加を受け付けていません');
             }

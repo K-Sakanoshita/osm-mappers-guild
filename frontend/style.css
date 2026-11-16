@@ -116,6 +116,10 @@ body.picking .map-wrap { position: fixed; inset: 0; z-index: 60; }
 }
 .form .hint { font-size: 12px; color: var(--muted); font-weight: 400; }
 .form .area-box { border: 1px dashed var(--border); border-radius: 8px; padding: 10px; font-size: 13px; }
+.changeset-picker { border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 13px; }
+.changeset-option { display: flex !important; align-items: flex-start; gap: 8px !important; padding: 10px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.changeset-option input { margin: 3px 0 0; flex: none; }
+.changeset-option span { font-weight: 400; line-height: 1.5; }
 .error-text { color: var(--danger); font-size: 13px; min-height: 1em; }
 
 .toast {
