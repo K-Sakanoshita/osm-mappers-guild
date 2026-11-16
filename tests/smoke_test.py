@@ -111,6 +111,18 @@ s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment": "報告", "chan
 check("invalid changeset -> 400", s == 400, str(d))
 s, d = call(A, "GET", f"/requests/{req_id}")
 check("invalid reports leave assignment unchanged", d["assignments"][0]["status"] == "joined" and not d["assignments"][0]["changeset_ids"], str(d))
+# Changesets are validated against OSM server, not trusted from browser.
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment":"他人の編集", "changeset_ids":[333333]}, csrfB)
+check("reject changeset owned by someone else -> 422", s == 422, str(d))
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment":"遠隔の編集", "changeset_ids":[444444]}, csrfB)
+check("reject changeset outside request bbox -> 422", s == 422, str(d))
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment":"0件編集", "changeset_ids":[555555]}, csrfB)
+check("reject empty changeset -> 422", s == 422, str(d))
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment":"存在しないID", "changeset_ids":[666666]}, csrfB)
+check("reject missing changeset -> 422", s == 422, str(d))
+s, d = call(B, "GET", f"/requests/{req_id}")
+check("invalid changesets never change assignment state", s == 200 and d["assignments"][0]["status"] == "joined", str(d["assignments"]))
+
 s, d = call(B, "POST", f"/requests/{req_id}/report",
             {"comment": "駅前の店舗3件を確認・更新しました", "changeset_ids": [123456, 123457]}, csrfB)
 check("B report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
@@ -146,13 +158,13 @@ s, d = call(A, "POST", f"/requests/{req2_id}/join", {}, csrfA)
 check("owner cannot join twice", s == 409, str(d))
 s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": []}, csrfA)
 check("owner report requires changeset", s == 400, str(d))
-s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": [123456]}, csrfA)
+s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": [223456]}, csrfA)
 check("owner can report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
 s, d = call(A, "GET", f"/requests/{req2_id}")
 owner_assignment = next(a for a in d["assignments"] if a["user_osm_id"] == 1001)
-check("owner report saves changeset", owner_assignment["changeset_ids"] == [123456], str(owner_assignment))
+check("owner report saves changeset", owner_assignment["changeset_ids"] == [223456], str(owner_assignment))
 s, d = call(A, "POST", f"/requests/{req2_id}/review", {"assignment_id": owner_assignment["id"], "action": "approve"}, csrfA)
-check("owner can approve own report", s == 200, str(d))
+check("owner approval leaves other joined participant in progress", s == 200 and d["request"]["status"] == "in_progress", str(d))
 
 s, d = call(B, "PATCH", f"/requests/{req2_id}", {"title": "乗っ取り"}, csrfB)
 check("non-owner edit -> 403", s == 403, str(s))
@@ -215,6 +227,82 @@ s, d = call(A, "POST", f"/assignments/{aid}/like", {"active": True}, csrfA)
 check("cannot like withdrawn work", s == 409, str(d))
 s, d = call(A, "POST", f"/assignments/{aid}/like", {"active": False}, csrfA)
 check("can remove like after withdrawal", s == 200 and d.get("like_count") == 0, str(d))
+
+
+# --- No-edit field verification and moderation
+s, d = call(A, "POST", "/requests", {
+    "title": "確認のみの依頼", "description": "対象設備の有無を確認",
+    "category": "公園・緑地", "area": RECT
+}, csrfA)
+check("create no-edit task", s == 201, str(d))
+noedit_id = d["request"]["id"]
+s, d = call(B, "POST", f"/requests/{noedit_id}/join", {}, csrfB)
+check("join no-edit task", s == 200, str(d))
+s, d = call(B, "POST", f"/requests/{noedit_id}/report", {
+    "report_kind": "no_changes", "comment": "現地確認の結果、既存データは正確でした",
+    "changeset_ids": []
+}, csrfB)
+check("valid no-edit report accepted", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
+s, d = call(A, "GET", f"/requests/{noedit_id}")
+noedit_assignment = d["assignments"][0]
+check("no-edit kind persisted", noedit_assignment["report_kind"] == "no_changes" and noedit_assignment["changeset_ids"] == [], str(d))
+s, d = call(A, "POST", f"/requests/{noedit_id}/review", {
+    "assignment_id": noedit_assignment["id"], "action": "approve"
+}, csrfA)
+check("no-edit report can be approved", s == 200 and d["request"]["status"] == "completed", str(d))
+
+s, d = call(anon, "POST", f"/requests/{noedit_id}/flag", {"reason": "不適切な依頼です"})
+check("anonymous cannot flag -> 401", s == 401, str(d))
+s, d = call(B, "GET", "/moderation/reports")
+check("non-admin cannot see reports -> 403", s == 403, str(d))
+s, d = call(B, "POST", f"/requests/{noedit_id}/flag", {"reason": "内容を確認してほしい依頼です"}, csrfB)
+check("submit flag", s == 201, str(d))
+s, d = call(B, "POST", f"/requests/{noedit_id}/flag", {"reason": "二回目の通報になります"}, csrfB)
+check("duplicate flag blocked", s == 409, str(d))
+s, d = call(A, "GET", "/moderation/reports")
+check("admin sees report queue", s == 200 and len(d["reports"]) == 1, str(d))
+report_id = d["reports"][0]["id"]
+s, d = call(B, "POST", f"/moderation/reports/{report_id}/review", {
+    "decision": "hide", "note": "規約違反として非表示"
+}, csrfB)
+check("non-admin cannot hide -> 403", s == 403, str(d))
+s, d = call(A, "POST", f"/moderation/reports/{report_id}/review", {
+    "decision": "dismiss", "note": "問題がないことを確認"
+}, csrfA)
+check("admin can dismiss", s == 200, str(d))
+s, d = call(A, "GET", "/moderation/reports")
+check("dismissed flag not in open queue", s == 200 and d["reports"] == [], str(d))
+
+# Separate flagged request to exercise hidden visibility and restoration.
+s, d = call(A, "POST", "/requests", {
+    "title": "一時非表示の確認", "description": "モデレーションによるアクセス制御",
+    "category": "その他", "area": RECT
+}, csrfA)
+hidden_id = d["request"]["id"]
+s, d = call(B, "POST", f"/requests/{hidden_id}/flag", {"reason": "この依頼を非表示にしてください"}, csrfB)
+check("flag request for hiding", s == 201, str(d))
+s, d = call(A, "GET", "/moderation/reports")
+hidden_report_id = d["reports"][0]["id"]
+s, d = call(A, "POST", f"/moderation/reports/{hidden_report_id}/review", {
+    "decision": "hide", "note": "管理者による非表示処理"
+}, csrfA)
+check("admin can hide from report", s == 200, str(d))
+s, d = call(anon, "GET", f"/requests/{hidden_id}")
+check("hidden detail is not public -> 404", s == 404, str(d))
+s, d = call(B, "GET", f"/requests/{hidden_id}")
+check("hidden detail forbidden to regular users -> 404", s == 404, str(d))
+s, d = call(anon, "GET", "/requests")
+check("hidden request omitted from listing", s == 200 and not any(r["id"] == hidden_id for r in d["requests"]), str(d))
+s, d = call(A, "GET", f"/requests/{hidden_id}")
+check("owner/admin can see hidden detail", s == 200 and d["request"]["is_hidden"] is True, str(d["request"]))
+s, d = call(B, "POST", f"/requests/{hidden_id}/join", {}, csrfB)
+check("cannot join hidden request -> 409", s == 409, str(d))
+s, d = call(A, "POST", f"/moderation/requests/{hidden_id}/visibility", {
+    "hidden": False, "reason": "確認後に再公開するため"
+}, csrfA)
+check("admin can restore visibility", s == 200 and d.get("is_hidden") is False, str(d))
+s, d = call(anon, "GET", f"/requests/{hidden_id}")
+check("restored request public again", s == 200 and d["request"]["is_hidden"] is False, str(d))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

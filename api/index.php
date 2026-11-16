@@ -195,14 +195,14 @@ function recompute_status(PDO $db, int $requestId): void
     $statuses = array_column($stmt->fetchAll(), 'status');
     if (in_array('reported', $statuses, true)) {
         $next = 'awaiting_review';
-    } elseif (in_array('approved', $statuses, true)) {
-        $next = 'completed';
     } elseif (in_array('changes_requested', $statuses, true)) {
         $next = 'changes_requested';
     } elseif (in_array('joined', $statuses, true)) {
         $next = 'in_progress';
+    } elseif ($statuses && count(array_unique($statuses)) === 1 && $statuses[0] === 'approved') {
+        $next = 'completed';
     } else {
-        $next = 'open';
+        $next = $statuses ? 'in_progress' : 'open';
     }
     $stmt = $db->prepare('UPDATE requests SET status = ?, updated_at = ? WHERE id = ?');
     $stmt->execute([$next, now(), $requestId]);
@@ -227,6 +227,7 @@ function present_request(array $row): array
     $row['id'] = (int)$row['id'];
     $row['user_id'] = (int)$row['user_id'];
     $row['owner_osm_id'] = (int)$row['owner_osm_id'];
+    $row['is_hidden'] = (bool)$row['is_hidden'];
     if (isset($row['participant_count'])) {
         $row['participant_count'] = (int)$row['participant_count'];
     }
@@ -298,6 +299,80 @@ function upsert_user(PDO $db, int $osmId, string $displayName): array
     return $stmt->fetch();
 }
 
+
+/** Administrators are explicitly listed by immutable OSM user id in server-side config. */
+function is_admin(?array $user, array $config): bool
+{
+    return $user !== null && in_array((int)$user['osm_user_id'], array_map('intval', $config['admin_osm_ids'] ?? []), true);
+}
+
+function require_admin(PDO $db, array $config): array
+{
+    $user = require_login($db);
+    if (!is_admin($user, $config)) {
+        fail(403, '管理者権限が必要です');
+    }
+    return $user;
+}
+
+function may_view_request(array $request, ?array $user, array $config): bool
+{
+    return !(bool)$request['is_hidden'] ||
+        ($user !== null && ((int)$request['user_id'] === (int)$user['id'] || is_admin($user, $config)));
+}
+
+/** Verify changeset provenance and approximate geographic relevance on the SERVER. */
+function validate_changeset(array $config, int $id, int $osmUserId, array $area): void
+{
+    $base = 'https://api.openstreetmap.org/api/0.6/changeset';
+    if (($config['app_env'] ?? 'production') === 'dev' && !empty($config['dev_changeset_api_base'])) {
+        $base = rtrim((string)$config['dev_changeset_api_base'], '/');
+    }
+    $ch = curl_init($base . '/' . $id . '.json');
+    if ($ch === false) {
+        fail(502, 'OSM APIに接続できません');
+    }
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => ['Accept: application/json', 'User-Agent: OSM-Mappers-Guild/1.0'],
+        CURLOPT_TIMEOUT => 12,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_FOLLOWLOCATION => false,
+    ]);
+    $raw = curl_exec($ch);
+    $code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    curl_close($ch);
+    if ($code === 404) {
+        fail(422, 'Changeset #' . $id . ' が見つかりません');
+    }
+    if ($code !== 200 || !is_string($raw) || strlen($raw) > 1048576) {
+        fail(502, 'OSM APIの確認に失敗しました。時間をおいて再試行してください');
+    }
+    $cs = json_decode($raw, true)['changeset'] ?? null;
+    if (!is_array($cs) || (int)($cs['id'] ?? 0) !== $id) {
+        fail(422, 'Changeset #' . $id . ' の応答が不正です');
+    }
+    if ((int)($cs['uid'] ?? 0) !== $osmUserId) {
+        fail(422, 'Changeset #' . $id . ' は報告者本人の編集ではありません');
+    }
+    if ((int)($cs['changes_count'] ?? 0) < 1) {
+        fail(422, 'Changeset #' . $id . ' は変更件数が0です');
+    }
+    foreach (['min_lon', 'min_lat', 'max_lon', 'max_lat'] as $key) {
+        if (!isset($cs[$key]) || !is_numeric($cs[$key])) {
+            fail(422, 'Changeset #' . $id . ' に編集範囲がありません');
+        }
+    }
+    $points = $area['coordinates'][0];
+    $lngs = array_column($points, 0);
+    $lats = array_column($points, 1);
+    // The changeset bbox is an envelope, not proof that edited objects lie inside.
+    if ((float)$cs['max_lon'] < min($lngs) || (float)$cs['min_lon'] > max($lngs) ||
+        (float)$cs['max_lat'] < min($lats) || (float)$cs['min_lat'] > max($lats)) {
+        fail(422, 'Changeset #' . $id . ' の編集範囲は依頼対象と重なりません');
+    }
+}
+
 // ------------------------------------------------------------------- router
 
 $uriPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
@@ -334,6 +409,7 @@ function route(PDO $db, array $config, string $method, string $route): void
             ] : null,
             'csrf_token' => $_SESSION['csrf'],
             'dev_login_enabled' => ($config['app_env'] ?? '') === 'dev',
+            'is_admin' => is_admin($user, $config),
             'categories' => CATEGORIES,
         ]);
     }
@@ -412,10 +488,101 @@ function route(PDO $db, array $config, string $method, string $route): void
         out(['user' => ['id' => (int)$user['id'], 'osm_user_id' => (int)$user['osm_user_id'], 'display_name' => $user['display_name']]]);
     }
 
+
+    // -------------------------------------------------------- moderation
+    if ($route === '/moderation/reports' && $method === 'GET') {
+        require_admin($db, $config);
+        $filter = ($_GET['status'] ?? '') === 'all' ? '' : "WHERE mr.status = 'open'";
+        $stmt = $db->query(
+            'SELECT mr.id, mr.request_id, mr.reason, mr.status, mr.created_at, mr.reviewed_at,
+                    r.title AS request_title, r.is_hidden, u.display_name AS reporter_name
+             FROM moderation_reports mr
+             JOIN requests r ON r.id = mr.request_id
+             JOIN users u ON u.id = mr.reporter_user_id ' .
+             $filter . ' ORDER BY mr.created_at DESC, mr.id DESC LIMIT 100'
+        );
+        out(['reports' => $stmt->fetchAll()]);
+    }
+
+    if (preg_match('#^/moderation/reports/(\d+)/review$#', $route, $m) && $method === 'POST') {
+        $admin = require_admin($db, $config);
+        require_csrf();
+        $b = body_json();
+        $decision = $b['decision'] ?? '';
+        $note = $b['note'] ?? '';
+        if (!in_array($decision, ['hide', 'dismiss'], true) ||
+            !is_string($note) || ($decision === 'hide' && !valid_text($note, 5, 500)) ||
+            ($decision === 'dismiss' && $note !== '' && !valid_text($note, 1, 500))) {
+            fail(400, 'decision は hide / dismiss、非表示の場合は5〜500文字の理由が必要です');
+        }
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT request_id, status FROM moderation_reports WHERE id = ?');
+            $stmt->execute([(int)$m[1]]);
+            $report = $stmt->fetch();
+            if (!$report) {
+                $db->rollBack();
+                fail(404, '通報が見つかりません');
+            }
+            if ($report['status'] !== 'open') {
+                $db->rollBack();
+                fail(409, 'この通報は対応済みです');
+            }
+            if ($decision === 'hide') {
+                $stmt = $db->prepare('UPDATE requests SET is_hidden = 1 WHERE id = ?');
+                $stmt->execute([$report['request_id']]);
+            }
+            $stmt = $db->prepare(
+                'UPDATE moderation_reports SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?'
+            );
+            $stmt->execute([$decision === 'hide' ? 'resolved' : 'dismissed', now(), $admin['id'], (int)$m[1]]);
+            $stmt = $db->prepare(
+                'INSERT INTO moderation_actions (request_id, actor_user_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([$report['request_id'], $admin['id'], $decision, trim($note), now()]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+        out(['ok' => true]);
+    }
+
+    if (preg_match('#^/moderation/requests/(\d+)/visibility$#', $route, $m) && $method === 'POST') {
+        $admin = require_admin($db, $config);
+        require_csrf();
+        $b = body_json();
+        if (!isset($b['hidden']) || !is_bool($b['hidden']) ||
+            !valid_text($b['reason'] ?? null, 5, 500)) {
+            fail(400, 'hidden は真偽値、理由は5〜500文字で指定してください');
+        }
+        $id = (int)$m[1];
+        if (!fetch_request($db, $id)) {
+            fail(404, '依頼が見つかりません');
+        }
+        $db->beginTransaction();
+        try {
+            $db->prepare('UPDATE requests SET is_hidden = ? WHERE id = ?')->execute([$b['hidden'] ? 1 : 0, $id]);
+            $db->prepare(
+                'INSERT INTO moderation_actions (request_id, actor_user_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)'
+            )->execute([$id, $admin['id'], $b['hidden'] ? 'hide' : 'unhide', trim($b['reason']), now()]);
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+        out(['ok' => true, 'is_hidden' => $b['hidden']]);
+    }
+
     // ---------------------------------------------------------- requests
     if ($route === '/requests' && $method === 'GET') {
         $where = [];
         $args = [];
+        $viewer = current_user($db);
+        if (!is_admin($viewer, $config)) {
+            $where[] = '(r.is_hidden = 0' . ($viewer ? ' OR r.user_id = ?' : '') . ')';
+            if ($viewer) $args[] = $viewer['id'];
+        }
         $status = $_GET['status'] ?? '';
         if (is_string($status) && $status !== '') {
             if (!in_array($status, REQUEST_STATUSES, true)) {
@@ -491,7 +658,7 @@ function route(PDO $db, array $config, string $method, string $route): void
         $id = (int)$m[1];
         if ($method === 'GET') {
             $req = fetch_request($db, $id);
-            if (!$req) {
+            if (!$req || !may_view_request($req, current_user($db), $config)) {
                 fail(404, '依頼が見つかりません');
             }
             $stmt = $db->prepare(
@@ -604,6 +771,40 @@ function route(PDO $db, array $config, string $method, string $route): void
         }
     }
 
+
+    // Logged-in users may submit at most one report per request.
+    if (preg_match('#^/requests/(\d+)/flag$#', $route, $m) && $method === 'POST') {
+        $me = require_login($db);
+        require_csrf();
+        $id = (int)$m[1];
+        $req = fetch_request($db, $id);
+        if (!$req || !may_view_request($req, $me, $config)) {
+            fail(404, '依頼が見つかりません');
+        }
+        $b = body_json();
+        if (!valid_text($b['reason'] ?? null, 10, 1000)) {
+            fail(400, '通報理由は10〜1000文字で入力してください');
+        }
+        $check = $db->prepare('SELECT 1 FROM moderation_reports WHERE request_id = ? AND reporter_user_id = ?');
+        $check->execute([$id, $me['id']]);
+        if ($check->fetchColumn()) {
+            fail(409, 'この依頼は通報済みです');
+        }
+        $stmt = $db->prepare(
+            'INSERT INTO moderation_reports (request_id, reporter_user_id, reason, status, created_at)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        try {
+            $stmt->execute([$id, $me['id'], trim($b['reason']), 'open', now()]);
+        } catch (PDOException $e) {
+            if (str_starts_with($e->getCode(), '23')) {
+                fail(409, 'この依頼は通報済みです');
+            }
+            throw $e;
+        }
+        out(['ok' => true], 201);
+    }
+
     // 依頼へのいいね（同じユーザーは1件につき1回、ON/OFFは冪等）
     if (preg_match('#^/requests/(\d+)/support$#', $route, $m) && $method === 'POST') {
         $me = require_login($db);
@@ -616,6 +817,9 @@ function route(PDO $db, array $config, string $method, string $route): void
         $b = body_json();
         if (!isset($b['active']) || !is_bool($b['active'])) {
             fail(400, 'active は真偽値で指定してください');
+        }
+        if ($req['is_hidden']) {
+            fail(409, '非公開の依頼にはいいねできません');
         }
         if ((int)$req['user_id'] === (int)$me['id']) {
             fail(403, '自分の依頼にはいいねできません');
@@ -642,7 +846,7 @@ function route(PDO $db, array $config, string $method, string $route): void
         require_csrf();
         $id = (int)$m[1];
         $stmt = $db->prepare(
-            'SELECT a.id, a.user_id, a.status, r.status AS request_status
+            'SELECT a.id, a.user_id, a.status, r.status AS request_status, r.is_hidden
              FROM assignments a JOIN requests r ON r.id = a.request_id WHERE a.id = ?'
         );
         $stmt->execute([$id]);
@@ -657,7 +861,8 @@ function route(PDO $db, array $config, string $method, string $route): void
         if (!isset($b['active']) || !is_bool($b['active'])) {
             fail(400, 'active は真偽値で指定してください');
         }
-        if ($b['active'] && ($assignment['status'] !== 'approved' || $assignment['request_status'] === 'withdrawn')) {
+        if ($b['active'] && ((bool)$assignment['is_hidden'] ||
+            $assignment['status'] !== 'approved' || $assignment['request_status'] === 'withdrawn')) {
             fail(409, '承認済みの成果にのみいいねできます');
         }
         if ($b['active']) {
@@ -683,6 +888,9 @@ function route(PDO $db, array $config, string $method, string $route): void
             fail(404, '依頼が見つかりません');
         }
         $isOwner = (int)$req['user_id'] === (int)$me['id'];
+        if ($req['is_hidden'] && $action !== 'withdraw') {
+            fail(409, '非公開の依頼は操作できません');
+        }
 
         $myAssignment = null;
         $stmt = $db->prepare('SELECT * FROM assignments WHERE request_id = ? AND user_id = ?');
@@ -747,9 +955,15 @@ function route(PDO $db, array $config, string $method, string $route): void
             if (!valid_text($b['comment'] ?? null, 1, 2000)) {
                 fail(400, '報告コメントは1〜2000文字で入力してください');
             }
+            $kind = $b['report_kind'] ?? 'edit';
+            if (!in_array($kind, ['edit', 'no_changes'], true)) {
+                fail(400, 'report_kind の値が不正です');
+            }
             $changesets = $b['changeset_ids'] ?? [];
-            if (!is_array($changesets) || count($changesets) < 1 || count($changesets) > 50) {
-                fail(400, 'Changeset ID を1〜50件指定してください');
+            if (!is_array($changesets) ||
+                ($kind === 'edit' && (count($changesets) < 1 || count($changesets) > 50)) ||
+                ($kind === 'no_changes' && count($changesets) !== 0)) {
+                fail(400, '編集報告はChangeset 1〜50件、変更不要報告は0件を指定してください');
             }
             $csIds = [];
             foreach ($changesets as $c) {
@@ -759,10 +973,13 @@ function route(PDO $db, array $config, string $method, string $route): void
                 }
                 $csIds[(int)$ci] = true;
             }
+            foreach (array_keys($csIds) as $ci) {
+                validate_changeset($config, (int)$ci, (int)$me['osm_user_id'], json_decode($req['area_geojson'], true));
+            }
             $db->beginTransaction();
             try {
-                $stmt = $db->prepare('UPDATE assignments SET status = ?, updated_at = ? WHERE id = ?');
-                $stmt->execute(['reported', now(), $myAssignment['id']]);
+                $stmt = $db->prepare('UPDATE assignments SET status = ?, report_kind = ?, updated_at = ? WHERE id = ?');
+                $stmt->execute(['reported', $kind, now(), $myAssignment['id']]);
                 $insert = str_starts_with($config['db_dsn'], 'sqlite:') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
                 $ins = $db->prepare($insert . ' INTO assignment_changesets (assignment_id, changeset_id, created_at) VALUES (?, ?, ?)');
                 foreach (array_keys($csIds) as $ci) {

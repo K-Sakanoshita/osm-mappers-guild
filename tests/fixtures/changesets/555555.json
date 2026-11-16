@@ -1,0 +1,14 @@
+{
+  "version": "0.6",
+  "changeset": {
+    "id": 555555,
+    "uid": 2002,
+    "min_lon": 135.5,
+    "min_lat": 34.68,
+    "max_lon": 135.52,
+    "max_lat": 34.7,
+    "changes_count": 0,
+    "open": false,
+    "created_at": "2026-11-16T22:00:00Z"
+  }
+}

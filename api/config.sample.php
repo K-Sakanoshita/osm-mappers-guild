@@ -40,4 +40,12 @@ return [
     // localhost と本番APIの通信は別サイトなので、サードパーティCookie制限を受ける点に注意。
     // 既定値は既存の直結環境との互換性のため 'None' のまま。
     'cookie_samesite' => 'None',
+
+    // モデレーション管理者のOSMユーザーIDを数値で列挙（表示名は使用しない）。
+    // 本番では信頼できる管理者のIDを設定。空のままだと誰も管理できません。
+    'admin_osm_ids' => [],
+
+    // 開発・CI限定: テスト用のChangesetメタデータAPI URL。
+    // 本番(app_env=production)では無視され、公式OSM APIだけを参照します。
+    'dev_changeset_api_base' => null,
 ];

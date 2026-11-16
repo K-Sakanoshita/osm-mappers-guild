@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS requests (
   status       VARCHAR(32) NOT NULL DEFAULT 'open',
   created_at   DATETIME NOT NULL,
   updated_at   DATETIME NOT NULL,
+  is_hidden    TINYINT(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (id),
   KEY idx_requests_status (status),
   KEY idx_requests_user (user_id),
@@ -32,6 +33,7 @@ CREATE TABLE IF NOT EXISTS assignments (
   request_id BIGINT UNSIGNED NOT NULL,
   user_id    BIGINT UNSIGNED NOT NULL,
   status     VARCHAR(32) NOT NULL DEFAULT 'joined',
+  report_kind VARCHAR(20) NOT NULL DEFAULT 'edit',
   created_at DATETIME NOT NULL,
   updated_at DATETIME NOT NULL,
   PRIMARY KEY (id),
@@ -79,3 +81,36 @@ CREATE TABLE IF NOT EXISTS likes (
   CONSTRAINT fk_unified_likes_assignment FOREIGN KEY (assignment_id) REFERENCES assignments (id) ON DELETE CASCADE,
   CONSTRAINT fk_unified_likes_user FOREIGN KEY (user_id) REFERENCES users (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Phase 1 hardening: no-edit reports and moderation (run AFTER 003_unify_likes)
+
+
+
+CREATE TABLE moderation_reports (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  request_id BIGINT UNSIGNED NOT NULL,
+  reporter_user_id BIGINT UNSIGNED NOT NULL,
+  reason TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'open',
+  created_at DATETIME NOT NULL,
+  reviewed_at DATETIME NULL,
+  reviewed_by BIGINT UNSIGNED NULL,
+  UNIQUE KEY uq_moderation_request_reporter (request_id, reporter_user_id),
+  KEY idx_moderation_status (status, created_at),
+  CONSTRAINT fk_mod_report_request FOREIGN KEY (request_id) REFERENCES requests (id) ON DELETE CASCADE,
+  CONSTRAINT fk_mod_report_reporter FOREIGN KEY (reporter_user_id) REFERENCES users (id),
+  CONSTRAINT fk_mod_report_reviewer FOREIGN KEY (reviewed_by) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE moderation_actions (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  request_id BIGINT UNSIGNED NOT NULL,
+  actor_user_id BIGINT UNSIGNED NOT NULL,
+  action VARCHAR(30) NOT NULL,
+  reason TEXT NOT NULL,
+  created_at DATETIME NOT NULL,
+  KEY idx_moderation_actions_request (request_id, created_at),
+  CONSTRAINT fk_mod_action_request FOREIGN KEY (request_id) REFERENCES requests (id) ON DELETE CASCADE,
+  CONSTRAINT fk_mod_action_actor FOREIGN KEY (actor_user_id) REFERENCES users (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+

@@ -97,3 +97,48 @@ POSTはログインと `X-CSRF-Token` が必要です。同じユーザーが同
 6. 未ログイン時は件数のみ表示、本人の依頼・成果にはいいねできないことを確認
 
 テスト環境では `python3 tests/smoke_test.py` を再実行します。
+
+## Phase 1 安全性強化（PR: マルチ参加者・Changeset検証・通報）
+
+### 変更点
+- 参加者が複数の場合、「完了」は参加者**全員**が承認済みの場合のみ。確認待ち・修正依頼・作業中を優先表示。取り下げは維持
+- Changesetのサーバー側照合: OSM公式API `GET /api/0.6/changeset/{id}.json` にアクセスし、OSM user ID、変更件数、編集bboxと依頼bboxの重なりを検証。これは編集内容・品質の保証ではなく、最終判定は依頼者が行う
+- 「現地確認したが変更不要」は `report_kind=no_changes` とChangeset 0件、コメント必須で報告できる
+- 依頼を通報できる。管理者のみ通報一覧・対応不要/非表示・非表示解除が可能。非公開依頼は通常ユーザーの一覧・詳細から隠し、操作を止める
+- 管理者操作は `moderation_actions` に記録される。管理者の指定は `config.php` のOSMユーザーID allowlist
+
+### 本番反映手順（既存DB）
+
+1. 本番MySQLの**全体バックアップ**を取る。適用中は依頼投稿や成果報告を止める
+2. 既存の `002_support_likes`、`003_unify_likes` が適用済みであることを確認
+3. `db/migrations/004_safety_moderation.mysql.sql` を**1回だけ実行**
+   - `assignments.report_kind` と `requests.is_hidden` を追加
+   - `moderation_reports` と `moderation_actions` を新規追加
+   - 既存の誤った「完了」状態を、全参加者の承認状況から修正（withdrawnは対象外）
+4. `api/config.php` に管理者を設定する（実際のOSM数値IDを使用、秘密情報として取り扱う）
+   ```php
+   'admin_osm_ids' => [12345678],
+   ```
+   ここでの `12345678` は**架空の例**。自分の実際のOSM IDに置き換える
+5. `api/index.php` をさくらサーバへ配置。追加した `dev_changeset_api_base` は本番では**設定しない**
+6. PRをマージしGitHub Pagesの更新を反映する
+7. 本番環境で依頼者・マッパー・管理者のそれぞれの権限と動作を確認する
+
+**DB未更新で新APIを配置すると、依頼の取得などで500エラーになる可能性があります。DB → API → フロントの順序を守ってください。**
+
+### API・管理の仕様
+
+- `POST /requests/{id}/report`: `{"report_kind":"edit","changeset_ids":[...],"comment":"..."}`、または `{"report_kind":"no_changes","changeset_ids":[],"comment":"..."}`
+- `POST /requests/{id}/flag`: `{"reason":"10文字以上の通報理由"}`。要ログイン/CSRF、1依頼につき1ユーザー1件
+- `GET /moderation/reports`: 管理者だけが未処理の通報一覧を取得（`?status=all` で対応済み含む）
+- `POST /moderation/reports/{id}/review`: 管理者が `{"decision":"hide","note":"理由（5文字以上）"}` または `dismiss`
+- `POST /moderation/requests/{id}/visibility`: 管理者が `{"hidden":false,"reason":"公開に戻す理由"}` 等を指定
+- `GET /me`: `is_admin` を返す
+
+### 制限と注意
+
+- OSM changesetのbboxは対象領域と重なっていても、変更オブジェクトがその領域内にあるとは限らない。**成果品質の自動判定には使わない**
+- OSM APIが一時的に応答しない場合、編集報告を受け付けず502を返す。障害時の回避として手動で偽のIDを通さない
+- 調査で「変更不要」と判断した理由は依頼者が確認・承認する
+- 通報理由は一般公開せず管理者のみに表示。非公開の依頼も作者と管理者は表示可能
+- 通報・非表示機能は最低限のMVP対策。IP単位レート制限、管理者通知、利用規約・プライバシー文書等は別途検討する

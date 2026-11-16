@@ -22,7 +22,7 @@ jobs:
       - name: Install PHP SQLite support
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-cli php-sqlite3
+          sudo apt-get install -y php-cli php-sqlite3 php-curl
       - name: Validate syntax
         run: |
           php -l api/index.php
@@ -30,6 +30,7 @@ jobs:
           node tests/social_ui_test.cjs
           node tests/social_draft_test.cjs
           python3 tests/likes_migration_test.py
+          python3 tests/safety_migration_test.py
       - name: Run PHP API smoke tests
         run: |
           python3 - <<'PY'
@@ -50,10 +51,14 @@ jobs:
               'osm_client_id' => '',
               'osm_client_secret' => '',
               'cookie_samesite' => 'Lax',
+              'admin_osm_ids' => [1001],
+              'dev_changeset_api_base' => 'http://127.0.0.1:8100/changesets',
           ];
           PHP
+          php -S 127.0.0.1:8100 -t tests/fixtures > /tmp/mg-osm-mock.log 2>&1 &
+          echo $! > /tmp/mg-osm-mock.pid
           php -S 127.0.0.1:8099 -t . > /tmp/mg-api-test.log 2>&1 &
           echo $! > /tmp/mg-api-test.pid
-          trap 'cat /tmp/mg-api-test.log; kill "$(cat /tmp/mg-api-test.pid)" || true' EXIT
+          trap 'cat /tmp/mg-api-test.log; cat /tmp/mg-osm-mock.log; kill "$(cat /tmp/mg-api-test.pid)" "$(cat /tmp/mg-osm-mock.pid)" || true' EXIT
           sleep 2
           python3 tests/smoke_test.py
