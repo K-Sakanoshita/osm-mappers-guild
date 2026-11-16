@@ -488,6 +488,92 @@ function route(PDO $db, array $config, string $method, string $route): void
         out(['user' => ['id' => (int)$user['id'], 'osm_user_id' => (int)$user['osm_user_id'], 'display_name' => $user['display_name']]]);
     }
 
+
+    // -------------------------------------------------------- moderation
+    if ($route === '/moderation/reports' && $method === 'GET') {
+        require_admin($db, $config);
+        $filter = ($_GET['status'] ?? '') === 'all' ? '' : "WHERE mr.status = 'open'";
+        $stmt = $db->query(
+            'SELECT mr.id, mr.request_id, mr.reason, mr.status, mr.created_at, mr.reviewed_at,
+                    r.title AS request_title, r.is_hidden, u.display_name AS reporter_name
+             FROM moderation_reports mr
+             JOIN requests r ON r.id = mr.request_id
+             JOIN users u ON u.id = mr.reporter_user_id ' .
+             $filter . ' ORDER BY mr.created_at DESC, mr.id DESC LIMIT 100'
+        );
+        out(['reports' => $stmt->fetchAll()]);
+    }
+
+    if (preg_match('#^/moderation/reports/(\d+)/review$#', $route, $m) && $method === 'POST') {
+        $admin = require_admin($db, $config);
+        require_csrf();
+        $b = body_json();
+        $decision = $b['decision'] ?? '';
+        $note = $b['note'] ?? '';
+        if (!in_array($decision, ['hide', 'dismiss'], true) ||
+            !is_string($note) || ($decision === 'hide' && !valid_text($note, 5, 500)) ||
+            ($decision === 'dismiss' && $note !== '' && !valid_text($note, 1, 500))) {
+            fail(400, 'decision は hide / dismiss、非表示の場合は5〜500文字の理由が必要です');
+        }
+        $db->beginTransaction();
+        try {
+            $stmt = $db->prepare('SELECT request_id, status FROM moderation_reports WHERE id = ?');
+            $stmt->execute([(int)$m[1]]);
+            $report = $stmt->fetch();
+            if (!$report) {
+                $db->rollBack();
+                fail(404, '通報が見つかりません');
+            }
+            if ($report['status'] !== 'open') {
+                $db->rollBack();
+                fail(409, 'この通報は対応済みです');
+            }
+            if ($decision === 'hide') {
+                $stmt = $db->prepare('UPDATE requests SET is_hidden = 1 WHERE id = ?');
+                $stmt->execute([$report['request_id']]);
+            }
+            $stmt = $db->prepare(
+                'UPDATE moderation_reports SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?'
+            );
+            $stmt->execute([$decision === 'hide' ? 'resolved' : 'dismissed', now(), $admin['id'], (int)$m[1]]);
+            $stmt = $db->prepare(
+                'INSERT INTO moderation_actions (request_id, actor_user_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)'
+            );
+            $stmt->execute([$report['request_id'], $admin['id'], $decision, trim($note), now()]);
+            $db->commit();
+        } catch (Throwable $e) {
+            if ($db->inTransaction()) $db->rollBack();
+            throw $e;
+        }
+        out(['ok' => true]);
+    }
+
+    if (preg_match('#^/moderation/requests/(\d+)/visibility$#', $route, $m) && $method === 'POST') {
+        $admin = require_admin($db, $config);
+        require_csrf();
+        $b = body_json();
+        if (!isset($b['hidden']) || !is_bool($b['hidden']) ||
+            !valid_text($b['reason'] ?? null, 5, 500)) {
+            fail(400, 'hidden は真偽値、理由は5〜500文字で指定してください');
+        }
+        $id = (int)$m[1];
+        if (!fetch_request($db, $id)) {
+            fail(404, '依頼が見つかりません');
+        }
+        $db->beginTransaction();
+        try {
+            $db->prepare('UPDATE requests SET is_hidden = ? WHERE id = ?')->execute([$b['hidden'] ? 1 : 0, $id]);
+            $db->prepare(
+                'INSERT INTO moderation_actions (request_id, actor_user_id, action, reason, created_at) VALUES (?, ?, ?, ?, ?)'
+            )->execute([$id, $admin['id'], $b['hidden'] ? 'hide' : 'unhide', trim($b['reason']), now()]);
+            $db->commit();
+        } catch (Throwable $e) {
+            $db->rollBack();
+            throw $e;
+        }
+        out(['ok' => true, 'is_hidden' => $b['hidden']]);
+    }
+
     // ---------------------------------------------------------- requests
     if ($route === '/requests' && $method === 'GET') {
         $where = [];
@@ -683,6 +769,40 @@ function route(PDO $db, array $config, string $method, string $route): void
             log_event($db, $id, null, (int)$me['id'], 'edit', null);
             out(['request' => present_request(fetch_request($db, $id))]);
         }
+    }
+
+
+    // Logged-in users may submit at most one report per request.
+    if (preg_match('#^/requests/(\d+)/flag$#', $route, $m) && $method === 'POST') {
+        $me = require_login($db);
+        require_csrf();
+        $id = (int)$m[1];
+        $req = fetch_request($db, $id);
+        if (!$req || !may_view_request($req, $me, $config)) {
+            fail(404, '依頼が見つかりません');
+        }
+        $b = body_json();
+        if (!valid_text($b['reason'] ?? null, 10, 1000)) {
+            fail(400, '通報理由は10〜1000文字で入力してください');
+        }
+        $check = $db->prepare('SELECT 1 FROM moderation_reports WHERE request_id = ? AND reporter_user_id = ?');
+        $check->execute([$id, $me['id']]);
+        if ($check->fetchColumn()) {
+            fail(409, 'この依頼は通報済みです');
+        }
+        $stmt = $db->prepare(
+            'INSERT INTO moderation_reports (request_id, reporter_user_id, reason, status, created_at)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        try {
+            $stmt->execute([$id, $me['id'], trim($b['reason']), 'open', now()]);
+        } catch (PDOException $e) {
+            if (str_starts_with($e->getCode(), '23')) {
+                fail(409, 'この依頼は通報済みです');
+            }
+            throw $e;
+        }
+        out(['ok' => true], 201);
     }
 
     // 依頼へのいいね（同じユーザーは1件につき1回、ON/OFFは冪等）
