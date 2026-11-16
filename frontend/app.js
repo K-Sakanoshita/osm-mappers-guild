@@ -291,7 +291,7 @@ function renderDetail() {
       <span>更新: ${esc(r.updated_at)}</span>
     </div>
     <p>${esc(r.description)}</p>
-    <p class="social-stat">応援 ${Number(r.support_count || 0)} 人</p>
+    <p class="social-stat">応援 <span id="support-count">${Number(r.support_count || 0)}</span> 人</p>
     ${r.reward_text ? `<p><strong>報酬・謝礼:</strong> ${esc(r.reward_text)}<br>
       <span class="hint" style="color:var(--muted);font-size:12px">※ 報酬の受け渡しは当事者間で行ってください。ギルドは決済・支払い保証・仲介を行いません。</span></p>` : ''}
     <div class="actions" id="detail-actions"></div>
@@ -305,7 +305,7 @@ function renderDetail() {
             <span class="badge badge-${esc(a.status)}">${esc(ASSIGNMENT_LABELS[a.status] || a.status)}</span>
           </div>
           ${changesetLinks(a.changeset_ids)}
-          <div class="social-stat">いいね ${Number(a.like_count || 0)} 件
+          <div class="social-stat">いいね <span id="like-count-${a.id}">${Number(a.like_count || 0)}</span> 件
           ${me && a.user_id !== me.id && (a.liked_by_me || (a.status === 'approved' && r.status !== 'withdrawn')) ? `
             <button class="btn btn-small" data-like-toggle="${a.id}" data-next-active="${a.liked_by_me ? 'false' : 'true'}" type="button">${a.liked_by_me ? 'いいねを取り消す' : 'いいね'}</button>` : ''}
           </div>
@@ -363,20 +363,38 @@ function renderDetail() {
   on('act-withdraw', async () => { if (confirm('この依頼を取り下げますか？')) await mutate('/requests/' + r.id + '/withdraw'); });
   on('act-edit', () => openForm(r));
   on('act-support', async () => {
+    const button = $('act-support');
+    button.disabled = true;
     try {
-      await api('/requests/' + r.id + '/support', { method: 'POST', body: { active: !d.supported_by_me } });
-      await openDetail(r.id);
+      const result = await api('/requests/' + r.id + '/support', { method: 'POST', body: { active: !d.supported_by_me } });
+      if (state.detail === d && !$('panel').hidden && button.isConnected && $('support-count')) {
+        d.supported_by_me = result.supported_by_me;
+        r.support_count = result.support_count;
+        $('support-count').textContent = result.support_count;
+        button.textContent = result.supported_by_me ? '応援を取り消す' : 'この依頼を応援';
+        if (!result.supported_by_me && r.status === 'withdrawn') button.remove();
+      }
       loadRequests();
-    } catch (e) { toast(e.message); }
+    } catch (e) { toast(e.message); } finally { button.disabled = false; }
   });
   document.querySelectorAll('[data-like-toggle]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      btn.disabled = true;
       try {
-        await api('/assignments/' + Number(btn.dataset.likeToggle) + '/like', {
+        const assignmentId = Number(btn.dataset.likeToggle);
+        const result = await api('/assignments/' + assignmentId + '/like', {
           method: 'POST', body: { active: btn.dataset.nextActive === 'true' },
         });
-        await openDetail(r.id);
-      } catch (e) { toast(e.message); }
+        if (state.detail === d && !$('panel').hidden && btn.isConnected && $('like-count-' + assignmentId)) {
+          const assignment = d.assignments.find((a) => a.id === assignmentId);
+          assignment.like_count = result.like_count;
+          assignment.liked_by_me = result.liked_by_me;
+          $('like-count-' + assignmentId).textContent = result.like_count;
+          btn.dataset.nextActive = result.liked_by_me ? 'false' : 'true';
+          btn.textContent = result.liked_by_me ? 'いいねを取り消す' : 'いいね';
+          if (!result.liked_by_me && (r.status === 'withdrawn' || assignment.status !== 'approved')) btn.remove();
+        }
+      } catch (e) { toast(e.message); } finally { btn.disabled = false; }
     });
   });
 
