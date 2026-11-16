@@ -32,6 +32,7 @@ const EVENT_LABELS = {
 
 const state = {
   me: null,
+  isAdmin: false,
   csrf: '',
   categories: [],
   requests: [],
@@ -267,6 +268,38 @@ async function openDetail(id) {
   }
 }
 
+
+async function openModeration() {
+  try {
+    const { reports } = await api('/moderation/reports');
+    openPanel(`<h2>通報管理（未対応）</h2><p>通報内容は管理者のみ閲覧できます。</p>
+      ${reports.length ? reports.map((item) => `<div class="participant">
+        <strong>${esc(item.request_title)}</strong>（依頼 #${Number(item.request_id)}）
+        <p>通報者: ${esc(item.reporter_name)}</p>
+        <p>${esc(item.reason)}</p>
+        <div class="actions">
+          <button class="btn btn-danger btn-small" type="button" data-mod-report="${Number(item.id)}" data-decision="hide">依頼を非表示</button>
+          <button class="btn btn-small" type="button" data-mod-report="${Number(item.id)}" data-decision="dismiss">対応不要として閉じる</button>
+        </div>
+      </div>`).join('') : '<p>未対応の通報はありません。</p>'}`);
+    document.querySelectorAll('[data-mod-report]').forEach((button) => {
+      button.addEventListener('click', async () => {
+        const decision = button.dataset.decision;
+        const note = prompt(decision === 'hide' ? '非表示の理由（5文字以上）' : '対応不要の理由（任意）', '');
+        if (note === null) return;
+        try {
+          await api('/moderation/reports/' + Number(button.dataset.modReport) + '/review', {
+            method: 'POST', body: { decision, note },
+          });
+          toast('通報に対応しました');
+          await openModeration();
+          loadRequests();
+        } catch (e) { toast(e.message); }
+      });
+    });
+  } catch (e) { toast(e.message); }
+}
+
 function changesetLinks(ids) {
   if (!ids || ids.length === 0) return '<div class="cs-links">Changeset: なし</div>';
   return '<div class="cs-links">Changeset: ' + ids.map((id) =>
@@ -296,6 +329,7 @@ function renderDetail() {
 
   let html = `
     <h2>${esc(r.title)}</h2>
+    ${r.is_hidden ? '<p class="error-text">この依頼は管理者により非公開です。</p>' : ''}
     <div class="meta">
       <span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span>
       <span>${esc(r.category)}</span>
@@ -307,6 +341,15 @@ function renderDetail() {
     ${r.reward_text ? `<p><strong>報酬・謝礼:</strong> ${esc(r.reward_text)}<br>
       <span class="hint" style="color:var(--muted);font-size:12px">※ 報酬の受け渡しは当事者間で行ってください。ギルドは決済・支払い保証・仲介を行いません。</span></p>` : ''}
     <div class="actions" id="detail-actions"></div>
+    ${me && !r.is_hidden ? `<details class="request-report">
+      <summary>この依頼を通報する</summary>
+      <form id="flag-form" class="form">
+        <label>通報理由（10〜1000文字）
+          <textarea id="flag-reason" maxlength="1000" minlength="10" rows="3" required></textarea>
+        </label>
+        <button type="submit" class="btn btn-small">運営に送信</button>
+      </form>
+    </details>` : ''}
 
     <h3>参加マッパー（${d.assignments.length}人）</h3>
     <div id="participants">
@@ -316,6 +359,7 @@ function renderDetail() {
             <span class="p-name">${esc(a.user_name)}</span>
             <span class="badge badge-${esc(a.status)}">${esc(ASSIGNMENT_LABELS[a.status] || a.status)}</span>
           </div>
+          ${a.report_kind === 'no_changes' && ['reported', 'approved', 'changes_requested'].includes(a.status) ? '<p class="hint">現地確認：変更不要</p>' : ''}
           ${changesetLinks(a.changeset_ids)}
           <div class="social-stat">いいね <span id="like-count-${a.id}">${Number(a.like_count || 0)}</span> 件
           ${me && a.user_id !== me.id && (a.liked_by_me || (a.status === 'approved' && r.status !== 'withdrawn')) ? `
@@ -355,22 +399,48 @@ function renderDetail() {
       btns += '<button id="act-edit" class="btn" type="button">編集</button>';
       btns += '<button id="act-withdraw" class="btn btn-danger" type="button">取り下げ</button>';
     }
-    if (!myAssignment && !['completed', 'withdrawn'].includes(r.status)) {
+    if (!r.is_hidden && !myAssignment && !['completed', 'withdrawn'].includes(r.status)) {
       btns += '<button id="act-join" class="btn btn-primary" type="button">参加する</button>';
     } else if (myAssignment && ['joined', 'changes_requested'].includes(myAssignment.status)) {
       btns += '<button id="act-leave" class="btn" type="button">参加を解除</button>';
     }
   }
-  if (me && !isOwner && (d.supported_by_me || r.status !== 'withdrawn')) {
+  if (me && !isOwner && !r.is_hidden && (d.supported_by_me || r.status !== 'withdrawn')) {
     btns += `<button id="act-support" class="btn" type="button">${d.supported_by_me ? '依頼へのいいねを取り消す' : '依頼にいいね'}</button>`;
   }
+  if (state.isAdmin) {
+    btns += `<button id="act-visibility" class="btn btn-small" type="button">${r.is_hidden ? '公開に戻す' : '管理者として非表示にする'}</button>`;
+  }
   actions.innerHTML = btns;
+
+  if ($('flag-form')) $('flag-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    try {
+      await api('/requests/' + r.id + '/flag', {
+        method: 'POST', body: { reason: $('flag-reason').value },
+      });
+      toast('運営へ通報しました');
+      $('flag-form').replaceWith(document.createTextNode('通報を受け付けました'));
+    } catch (e) { toast(e.message); }
+  });
 
   const on = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn); };
   on('act-join', async () => { await mutate('/requests/' + r.id + '/join'); });
   on('act-leave', async () => { if (confirm('参加を解除しますか？')) await mutate('/requests/' + r.id + '/leave'); });
   on('act-withdraw', async () => { if (confirm('この依頼を取り下げますか？')) await mutate('/requests/' + r.id + '/withdraw'); });
   on('act-edit', () => openForm(r));
+  on('act-visibility', async () => {
+    const reason = prompt(r.is_hidden ? '公開に戻す理由（5文字以上）' : '非表示の理由（5文字以上）', '');
+    if (reason === null) return;
+    try {
+      await api('/moderation/requests/' + r.id + '/visibility', {
+        method: 'POST', body: { hidden: !r.is_hidden, reason },
+      });
+      toast('公開状態を変更しました');
+      await openDetail(r.id);
+      loadRequests();
+    } catch (e) { toast(e.message); }
+  });
   on('act-support', async () => {
     const button = $('act-support');
     button.disabled = true;
@@ -420,15 +490,21 @@ function renderDetail() {
   });
 
   // 作業報告フォーム（参加中で未報告/修正依頼のとき）
-  if (me && myAssignment && ['joined', 'changes_requested'].includes(myAssignment.status) && r.status !== 'withdrawn') {
+  if (me && myAssignment && ['joined', 'changes_requested'].includes(myAssignment.status) && r.status !== 'withdrawn' && !r.is_hidden) {
     $('report-area').innerHTML = `
       <h3>作業報告</h3>
       <form class="form" id="report-form">
         <label>報告コメント
           <textarea id="report-comment" rows="4" required maxlength="2000" placeholder="実施した内容、現地確認の結果など"></textarea>
         </label>
-        <div class="changeset-picker">
-          <strong>Changeset（必須、複数選択可）</strong>
+        <label>報告の種類
+          <select id="report-kind">
+            <option value="edit">OSMを編集した</option>
+            <option value="no_changes">現地確認したが変更不要だった</option>
+          </select>
+        </label>
+        <div class="changeset-picker" id="report-changeset-picker">
+          <strong>Changeset（編集報告では必須、複数選択可）</strong>
           <p class="hint">対象エリアと重なるあなたの Changeset を取得します。依頼に関係するものを選んでください。</p>
           <button id="report-fetch-changesets" class="btn btn-small" type="button">Changeset を取得</button>
           <div id="report-changeset-list" aria-live="polite"></div>
@@ -437,6 +513,9 @@ function renderDetail() {
         <button class="btn btn-primary" type="submit">報告する</button>
       </form>`;
     const selectedChangesets = new Set();
+    $('report-kind').addEventListener('change', () => {
+      $('report-changeset-picker').hidden = $('report-kind').value === 'no_changes';
+    });
     $('report-fetch-changesets').addEventListener('click', async () => {
       const button = $('report-fetch-changesets');
       const list = $('report-changeset-list');
@@ -475,15 +554,16 @@ function renderDetail() {
     });
     $('report-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      if (selectedChangesets.size === 0 || selectedChangesets.size > 50) {
-        $('report-error').textContent = 'Changeset を1〜50件選んでください';
+      const kind = $('report-kind').value;
+      if (kind === 'edit' && (selectedChangesets.size === 0 || selectedChangesets.size > 50)) {
+        $('report-error').textContent = '編集報告ではChangesetを1〜50件選んでください';
         return;
       }
-      const ids = Array.from(selectedChangesets);
+      const ids = kind === 'no_changes' ? [] : Array.from(selectedChangesets);
       try {
         await api('/requests/' + r.id + '/report', {
           method: 'POST',
-          body: { comment: $('report-comment').value, changeset_ids: ids },
+          body: { comment: $('report-comment').value, changeset_ids: ids, report_kind: kind },
         });
         toast('報告しました');
         await openDetail(r.id);
@@ -638,6 +718,7 @@ async function loadMe() {
   try {
     const data = await api('/me');
     state.me = data.user;
+    state.isAdmin = data.is_admin === true;
     state.csrf = data.csrf_token;
     state.categories = data.categories || [];
     const catSel = $('filter-category');
@@ -655,6 +736,7 @@ function renderAuth() {
   $('user-info').textContent = me ? `${me.display_name} さん` : '未ログイン';
   $('btn-login').hidden = !!me;
   $('btn-logout').hidden = !me;
+  $('btn-moderation').hidden = !state.isAdmin;
 }
 
 $('btn-login').addEventListener('click', () => {
@@ -664,6 +746,7 @@ $('btn-logout').addEventListener('click', async () => {
   try {
     await api('/auth/logout', { method: 'POST', body: {} });
     state.me = null;
+    state.isAdmin = false;
     renderAuth();
     closePanel();
     loadRequests();
@@ -685,6 +768,7 @@ $('btn-dev-login').addEventListener('click', async () => {
   } catch (e) { toast(e.message); }
 });
 $('btn-new-request').addEventListener('click', () => openForm(null));
+$('btn-moderation').addEventListener('click', openModeration);
 $('panel-close').addEventListener('click', closePanel);
 $('filter-status').addEventListener('change', loadRequests);
 $('filter-category').addEventListener('change', loadRequests);
