@@ -306,7 +306,7 @@ function renderDetail() {
           </div>
           ${changesetLinks(a.changeset_ids)}
           <div class="social-stat">いいね ${Number(a.like_count || 0)} 件
-          ${me && a.status === 'approved' && a.user_id !== me.id && r.status !== 'withdrawn' ? `
+          ${me && a.user_id !== me.id && (a.liked_by_me || (a.status === 'approved' && r.status !== 'withdrawn')) ? `
             <button class="btn btn-small" data-like-toggle="${a.id}" data-next-active="${a.liked_by_me ? 'false' : 'true'}" type="button">${a.liked_by_me ? 'いいねを取り消す' : 'いいね'}</button>` : ''}
           </div>
           ${isOwner && a.status === 'reported' ? `
@@ -352,7 +352,7 @@ function renderDetail() {
       btns += '<button id="act-leave" class="btn" type="button">参加を解除</button>';
     }
   }
-  if (me && !isOwner && r.status !== 'withdrawn') {
+  if (me && !isOwner && (d.supported_by_me || r.status !== 'withdrawn')) {
     btns += `<button id="act-support" class="btn" type="button">${d.supported_by_me ? '応援を取り消す' : 'この依頼を応援'}</button>`;
   }
   actions.innerHTML = btns;

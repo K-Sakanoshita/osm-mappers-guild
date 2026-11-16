@@ -650,15 +650,15 @@ function route(PDO $db, array $config, string $method, string $route): void
         if (!$assignment) {
             fail(404, '成果が見つかりません');
         }
-        if ($assignment['status'] !== 'approved' || $assignment['request_status'] === 'withdrawn') {
-            fail(409, '承認済みの成果にのみいいねできます');
-        }
         if ((int)$assignment['user_id'] === (int)$me['id']) {
             fail(403, '自分の成果にはいいねできません');
         }
         $b = body_json();
         if (!isset($b['active']) || !is_bool($b['active'])) {
             fail(400, 'active は真偽値で指定してください');
+        }
+        if ($b['active'] && ($assignment['status'] !== 'approved' || $assignment['request_status'] === 'withdrawn')) {
+            fail(409, '承認済みの成果にのみいいねできます');
         }
         if ($b['active']) {
             $insertSql = str_starts_with($config['db_dsn'], 'sqlite:')

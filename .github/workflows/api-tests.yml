@@ -27,6 +27,7 @@ jobs:
         run: |
           php -l api/index.php
           node --check frontend/app.js
+          node tests/social_ui_test.cjs
       - name: Run PHP API smoke tests
         run: |
           python3 - <<'PY'
