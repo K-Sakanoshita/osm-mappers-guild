@@ -30,6 +30,7 @@ jobs:
           node tests/social_ui_test.cjs
           node tests/social_draft_test.cjs
           python3 tests/likes_migration_test.py
+          python3 tests/safety_migration_test.py
       - name: Run PHP API smoke tests
         run: |
           python3 - <<'PY'
