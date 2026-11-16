@@ -107,6 +107,12 @@ check("B join second request (multi)", s == 200, str(d))
 # --- 報告フロー
 s, d = call(A, "POST", f"/requests/{req_id}/report", {"comment": "やりました", "changeset_ids": [1]}, csrfA)
 check("non-participant report -> 403", s == 403, str(s))
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment": "報告", "changeset_ids": []}, csrfB)
+check("empty changesets -> 400", s == 400, str(d))
+s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment": "報告", "changeset_ids": [0]}, csrfB)
+check("invalid changeset -> 400", s == 400, str(d))
+s, d = call(A, "GET", f"/requests/{req_id}")
+check("invalid reports leave assignment unchanged", d["assignments"][0]["status"] == "joined" and not d["assignments"][0]["changeset_ids"], str(d))
 s, d = call(B, "POST", f"/requests/{req_id}/report",
             {"comment": "駅前の店舗3件を確認・更新しました", "changeset_ids": [123456, 123457]}, csrfB)
 check("B report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))

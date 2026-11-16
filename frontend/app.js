@@ -37,7 +37,7 @@ const state = {
   requests: [],
   filterMode: 'all', // all | mine | joining
   detail: null,
-  pick: { active: false, corners: [], forForm: false },
+  pick: { active: false, corners: [], previousCorners: [] },
   editingId: null,
 };
 
@@ -129,12 +129,12 @@ map.on('click', (e) => {
   if (state.pick.active) {
     state.pick.corners.push([e.lngLat.lng, e.lngLat.lat]);
     if (state.pick.corners.length === 2) {
-      state.pick.active = false;
       drawPick();
+      finishPicking();
       updateAreaBox();
       toast('範囲を設定しました');
     } else {
-      toast('もう1点（対角）をクリックしてください');
+      $('pick-instruction').textContent = 'もう1点（対角）をタップしてください';
     }
     return;
   }
@@ -167,6 +167,14 @@ function drawPick() {
 function pickedArea() {
   if (state.pick.corners.length !== 2) return null;
   return rectPolygon(state.pick.corners[0], state.pick.corners[1]);
+}
+
+function finishPicking() {
+  state.pick.active = false;
+  document.body.classList.remove('picking');
+  $('pick-controls').hidden = true;
+  $('panel').hidden = false;
+  map.resize();
 }
 
 function refreshAreas() {
@@ -366,9 +374,9 @@ function renderDetail() {
         <label>報告コメント
           <textarea id="report-comment" rows="4" required maxlength="2000" placeholder="実施した内容、現地確認の結果など"></textarea>
         </label>
-        <label>Changeset ID（複数可、カンマ区切り）
-          <input id="report-changesets" type="text" placeholder="例: 123456789, 123456790">
-          <span class="hint">OSMで編集したChangesetのIDを入力してください。現地確認のみで変更がなかった場合は空欄でも構いません。</span>
+        <label>Changeset ID（必須、複数可、カンマ区切り）
+          <input id="report-changesets" type="text" required placeholder="例: 123456789, 123456790">
+          <span class="hint">OSMで編集したChangesetのIDを入力してください。</span>
         </label>
         <p class="error-text" id="report-error"></p>
         <button class="btn btn-primary" type="submit">報告する</button>
@@ -376,7 +384,12 @@ function renderDetail() {
     $('report-form').addEventListener('submit', async (ev) => {
       ev.preventDefault();
       const raw = $('report-changesets').value.trim();
-      const ids = raw === '' ? [] : raw.split(/[,\s]+/).filter(Boolean).map(Number);
+      const parts = raw.split(/[,\s]+/).filter(Boolean);
+      if (parts.length === 0 || parts.length > 50 || parts.some((part) => !/^[1-9]\d*$/.test(part) || !Number.isSafeInteger(Number(part)))) {
+        $('report-error').textContent = 'Changeset ID は正の整数で1〜50件指定してください';
+        return;
+      }
+      const ids = parts.map(Number);
       try {
         await api('/requests/' + r.id + '/report', {
           method: 'POST',
@@ -410,7 +423,7 @@ function updateAreaBox() {
   if (!box) return;
   const area = pickedArea();
   if (!area) {
-    box.textContent = '未設定です。「地図で範囲を指定」を押し、地図で対角の2点をクリックしてください。';
+    box.textContent = '未設定です。「地図で範囲を指定」を押し、地図で対角の2点を選んでください。';
     return;
   }
   const pts = area.coordinates[0];
@@ -464,7 +477,7 @@ function openForm(existing) {
         <p id="form-area-summary" class="hint"></p>
         <button id="f-pick" class="btn btn-small" type="button">地図で範囲を指定</button>
         <button id="f-pick-clear" class="btn btn-small" type="button">範囲をクリア</button>
-        <p class="hint">パネルを閉じずに、地図の上で対角の2点をクリックしてください。</p>
+        <p class="hint">地図に切り替わります。対角の2点を選んでください。</p>
       </div>
       <p class="error-text" id="form-error"></p>
       <button class="btn btn-primary" type="submit">${existing ? '保存する' : '投稿する'}</button>
@@ -472,11 +485,15 @@ function openForm(existing) {
   updateAreaBox();
 
   $('f-pick').addEventListener('click', () => {
+    state.pick.previousCorners = state.pick.corners.map((corner) => [...corner]);
     state.pick.corners = [];
     state.pick.active = true;
     drawPick();
-    updateAreaBox();
-    toast('地図で1点目をクリックしてください');
+    $('panel').hidden = true;
+    $('pick-instruction').textContent = '地図で1点目をタップしてください';
+    $('pick-controls').hidden = false;
+    document.body.classList.add('picking');
+    map.resize();
   });
   $('f-pick-clear').addEventListener('click', () => {
     state.pick.corners = [];
@@ -517,6 +534,13 @@ function openForm(existing) {
     }
   });
 }
+
+$('pick-cancel').addEventListener('click', () => {
+  state.pick.corners = state.pick.previousCorners;
+  drawPick();
+  finishPicking();
+  updateAreaBox();
+});
 
 // -------------------------------------------------------------------- auth
 

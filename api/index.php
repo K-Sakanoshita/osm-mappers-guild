@@ -659,8 +659,8 @@ function route(PDO $db, array $config, string $method, string $route): void
                 fail(400, '報告コメントは1〜2000文字で入力してください');
             }
             $changesets = $b['changeset_ids'] ?? [];
-            if (!is_array($changesets) || count($changesets) > 50) {
-                fail(400, 'Changeset ID は50件までです');
+            if (!is_array($changesets) || count($changesets) < 1 || count($changesets) > 50) {
+                fail(400, 'Changeset ID を1〜50件指定してください');
             }
             $csIds = [];
             foreach ($changesets as $c) {
@@ -670,17 +670,22 @@ function route(PDO $db, array $config, string $method, string $route): void
                 }
                 $csIds[(int)$ci] = true;
             }
-            $stmt = $db->prepare('UPDATE assignments SET status = ?, updated_at = ? WHERE id = ?');
-            $stmt->execute(['reported', now(), $myAssignment['id']]);
-            $ins = $db->prepare('INSERT OR IGNORE INTO assignment_changesets (assignment_id, changeset_id, created_at) VALUES (?, ?, ?)');
-            if (!str_starts_with($config['db_dsn'], 'sqlite:')) {
-                $ins = $db->prepare('INSERT IGNORE INTO assignment_changesets (assignment_id, changeset_id, created_at) VALUES (?, ?, ?)');
+            $db->beginTransaction();
+            try {
+                $stmt = $db->prepare('UPDATE assignments SET status = ?, updated_at = ? WHERE id = ?');
+                $stmt->execute(['reported', now(), $myAssignment['id']]);
+                $insert = str_starts_with($config['db_dsn'], 'sqlite:') ? 'INSERT OR IGNORE' : 'INSERT IGNORE';
+                $ins = $db->prepare($insert . ' INTO assignment_changesets (assignment_id, changeset_id, created_at) VALUES (?, ?, ?)');
+                foreach (array_keys($csIds) as $ci) {
+                    $ins->execute([$myAssignment['id'], $ci, now()]);
+                }
+                log_event($db, $id, (int)$myAssignment['id'], (int)$me['id'], 'report', trim($b['comment']));
+                recompute_status($db, $id);
+                $db->commit();
+            } catch (Throwable $e) {
+                $db->rollBack();
+                throw $e;
             }
-            foreach (array_keys($csIds) as $ci) {
-                $ins->execute([$myAssignment['id'], $ci, now()]);
-            }
-            log_event($db, $id, (int)$myAssignment['id'], (int)$me['id'], 'report', trim($b['comment']));
-            recompute_status($db, $id);
             out(['ok' => true, 'request' => present_request(fetch_request($db, $id))]);
         }
 
