@@ -6,7 +6,7 @@
 <title>OSM Mappers Guild | マッピング依頼とマッパーをつなぐ</title>
 <meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
-<link rel="stylesheet" href="./style.css?v=20261117-3">
+<link rel="stylesheet" href="./style.css?v=20261117-5">
 </head>
 <body>
 <header class="app-header">
@@ -16,6 +16,7 @@
   </div>
   <div class="header-actions">
     <span id="user-info" class="user-info"></span>
+    <button id="btn-moderation" class="btn" type="button" hidden>通報管理</button>
     <button id="btn-new-request" class="btn btn-primary" type="button">依頼を投稿</button>
     <button id="btn-login" class="btn" type="button">OSMでログイン</button>
     <button id="btn-logout" class="btn" type="button" hidden>ログアウト</button>
@@ -73,6 +74,6 @@
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="./config.js?v=20261115-1"></script>
-<script src="./app.js?v=20261117-4"></script>
+<script src="./app.js?v=20261117-5"></script>
 </body>
 </html>
