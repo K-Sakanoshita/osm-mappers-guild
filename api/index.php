@@ -412,6 +412,14 @@ function route(PDO $db, array $config, string $method, string $route): void
             $where[] = 'r.category = ?';
             $args[] = $category;
         }
+        $area = $_GET['area'] ?? '';
+        if ($area === 'worldwide') {
+            $where[] = "r.area_geojson = 'null'";
+        } elseif ($area === 'located') {
+            $where[] = "r.area_geojson <> 'null'";
+        } elseif ($area !== '') {
+            fail(400, 'area の値が不正です');
+        }
         if (($_GET['owner'] ?? '') === 'me' || ($_GET['participating'] ?? '') === 'me') {
             $me = require_login($db);
             if (($_GET['owner'] ?? '') === 'me') {

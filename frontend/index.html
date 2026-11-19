@@ -7,7 +7,7 @@
 <meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
 <link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
-<link rel="stylesheet" href="./style.css?v=20261119-2">
+<link rel="stylesheet" href="./style.css?v=20261119-4">
 </head>
 <body>
 <header class="app-header">
@@ -44,11 +44,12 @@
         <button id="filter-joining" class="btn btn-small" type="button">参加中</button>
       </div>
     </div>
-    <h2 class="list-heading">依頼一覧</h2>
-    <div id="request-list" class="request-list"></div>
+    <h2 id="request-list-heading" class="list-heading">依頼一覧</h2>
+    <div id="request-list" class="request-list" aria-live="polite"></div>
   </aside>
   <section class="map-wrap">
     <div id="map"></div>
+    <button id="filter-worldwide" class="btn" type="button" aria-pressed="false" aria-controls="request-list">場所指定なしの依頼</button>
   </section>
 </main>
 
@@ -65,6 +66,6 @@
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="./config.js?v=20261115-1"></script>
-<script src="./app.js?v=20261119-3"></script>
+<script src="./app.js?v=20261119-4"></script>
 </body>
 </html>

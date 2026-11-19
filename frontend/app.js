@@ -37,6 +37,7 @@ const state = {
   categories: [],
   requests: [],
   filterMode: 'all', // all | mine | joining
+  showWorldwide: false,
   detail: null,
   pick: { active: false, corners: [], previousCorners: [] },
   editingId: null,
@@ -153,10 +154,10 @@ function finishPicking() {
   map.resize();
 }
 
-function refreshRequestPins() {
+function refreshRequestPins(requests) {
   requestPins.forEach((pin) => pin.remove());
   requestPins.length = 0;
-  for (const request of state.requests) {
+  for (const request of requests) {
     const bounds = areaBounds(request.area);
     if (!bounds) continue;
     const [[west, south], [east, north]] = bounds;
@@ -189,7 +190,10 @@ function fitToArea(area) {
 
 // -------------------------------------------------------------------- list
 
+let listRevision = 0;
+
 async function loadRequests() {
+  const revision = ++listRevision;
   const params = new URLSearchParams();
   const st = $('filter-status').value;
   const cat = $('filter-category').value;
@@ -197,20 +201,30 @@ async function loadRequests() {
   if (cat) params.set('category', cat);
   if (state.filterMode === 'mine') params.set('owner', 'me');
   if (state.filterMode === 'joining') params.set('participating', 'me');
+  params.set('area', 'located');
+  const locatedRequests = api('/requests?' + params.toString());
   try {
-    const data = await api('/requests?' + params.toString());
-    state.requests = data.requests;
+    let listRequests = locatedRequests;
+    if (state.showWorldwide) {
+      params.set('area', 'worldwide');
+      listRequests = api('/requests?' + params.toString());
+    }
+    const [located, list] = await Promise.all([locatedRequests, listRequests]);
+    if (revision !== listRevision) return;
+    state.requests = list.requests;
     renderList();
-    refreshRequestPins();
+    refreshRequestPins(located.requests);
   } catch (e) {
+    if (revision !== listRevision) return;
     $('request-list').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>';
+    refreshRequestPins([]);
   }
 }
 
 function renderList() {
   const el = $('request-list');
   if (state.requests.length === 0) {
-    el.innerHTML = '<p>依頼はまだありません。</p>';
+    el.textContent = state.showWorldwide ? '条件に一致する場所指定なしの依頼はありません。' : '依頼はまだありません。';
     return;
   }
   el.innerHTML = state.requests.map((r) => `
@@ -710,6 +724,14 @@ $('btn-mypage').addEventListener('click', openMyPage);
 $('panel-close').addEventListener('click', closePanel);
 $('filter-status').addEventListener('change', loadRequests);
 $('filter-category').addEventListener('change', loadRequests);
+$('filter-worldwide').addEventListener('click', () => {
+  state.showWorldwide = !state.showWorldwide;
+  $('filter-worldwide').setAttribute('aria-pressed', String(state.showWorldwide));
+  const heading = $('request-list-heading');
+  heading.textContent = state.showWorldwide ? '場所指定なしの依頼' : '依頼一覧';
+  heading.scrollIntoView({ block: 'nearest' });
+  loadRequests();
+});
 $('filter-all').addEventListener('click', () => { state.filterMode = 'all'; loadRequests(); });
 $('filter-mine').addEventListener('click', () => { state.filterMode = 'mine'; loadRequests(); });
 $('filter-joining').addEventListener('click', () => { state.filterMode = 'joining'; loadRequests(); });

@@ -248,6 +248,15 @@ worldwide_path = f"/requests/{worldwide_id}"
 s, d = call(anon, "GET", "/requests?status=open")
 check("list includes worldwide request", s == 200 and any(
     r["id"] == worldwide_id and r["area"] is None for r in d["requests"]), str(d))
+s, d = call(anon, "GET", "/requests?status=open&area=worldwide")
+check("list worldwide open requests", s == 200 and [r["id"] for r in d["requests"]] == [worldwide_id], str(d))
+s, d = call(anon, "GET", "/requests?status=completed&area=worldwide")
+check("worldwide filter respects status", s == 200 and d["requests"] == [], str(d))
+s, d = call(anon, "GET", "/requests?area=located")
+check("list located requests", s == 200 and bool(d["requests"]) and all(
+    r["area"] is not None for r in d["requests"]), str(d))
+s, d = call(anon, "GET", "/requests?area=unknown")
+check("invalid area filter -> 400", s == 400, str(d))
 s, d = call(A, "PATCH", worldwide_path, {"area": RECT}, csrfA)
 check("add an area to a worldwide request", s == 200 and d["request"]["area"] == RECT, str(d))
 s, d = call(A, "PATCH", worldwide_path, {"title": "病院を追加"}, csrfA)
