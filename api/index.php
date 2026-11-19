@@ -333,7 +333,6 @@ function route(PDO $db, array $config, string $method, string $route): void
                 'display_name' => $user['display_name'],
             ] : null,
             'csrf_token' => $_SESSION['csrf'],
-            'dev_login_enabled' => ($config['app_env'] ?? '') === 'dev',
             'categories' => CATEGORIES,
         ]);
     }
@@ -391,25 +390,6 @@ function route(PDO $db, array $config, string $method, string $route): void
         require_csrf();
         unset($_SESSION['user_id']);
         out(['ok' => true]);
-    }
-
-    if ($route === '/auth/dev-login' && $method === 'POST') {
-        // 開発専用: OSM OAuth アプリ未登録でも一連の流れを確認するための疑似ログイン。
-        // 本番（app_env != dev）では常に無効。
-        if (($config['app_env'] ?? '') !== 'dev') {
-            fail(404, 'not found');
-        }
-        require_csrf();
-        $b = body_json();
-        $osmId = filter_var($b['osm_user_id'] ?? null, FILTER_VALIDATE_INT);
-        if ($osmId === false || $osmId <= 0 || !valid_text($b['display_name'] ?? null, 1, 100)) {
-            fail(400, 'osm_user_id（正の整数）と display_name（1〜100文字）が必要です');
-        }
-        $user = upsert_user($db, (int)$osmId, trim($b['display_name']));
-        session_regenerate_id(true);
-        $_SESSION['user_id'] = (int)$user['id'];
-        $_SESSION['csrf'] = bin2hex(random_bytes(32));
-        out(['user' => ['id' => (int)$user['id'], 'osm_user_id' => (int)$user['osm_user_id'], 'display_name' => $user['display_name']]]);
     }
 
     // ---------------------------------------------------------- requests
@@ -473,14 +453,16 @@ function route(PDO $db, array $config, string $method, string $route): void
         if ($reward !== null && !valid_text($reward, 1, 300)) {
             fail(400, '報酬・謝礼欄は300文字以内で入力してください');
         }
-        if (!valid_rectangle($b['area'] ?? null)) {
+        // 場所指定なしは既存の NOT NULL 列に JSON の null として保存する。
+        $area = $b['area'] ?? null;
+        if ($area !== null && !valid_rectangle($area)) {
             fail(400, '対象エリアは矩形（ポリゴン）で指定してください');
         }
         $stmt = $db->prepare('INSERT INTO requests (user_id, title, description, category, reward_text, area_geojson, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
         $stmt->execute([
             $me['id'], trim($b['title']), $b['description'], $b['category'],
             $reward !== null ? trim($reward) : null,
-            json_encode($b['area'], JSON_UNESCAPED_UNICODE), 'open', now(), now(),
+            json_encode($area, JSON_UNESCAPED_UNICODE), 'open', now(), now(),
         ]);
         $id = (int)$db->lastInsertId();
         log_event($db, $id, null, (int)$me['id'], 'create', null);
@@ -585,7 +567,7 @@ function route(PDO $db, array $config, string $method, string $route): void
                 $args[] = $b['reward_text'] !== null ? trim($b['reward_text']) : null;
             }
             if (array_key_exists('area', $b)) {
-                if (!valid_rectangle($b['area'])) {
+                if ($b['area'] !== null && !valid_rectangle($b['area'])) {
                     fail(400, '対象エリアは矩形（ポリゴン）で指定してください');
                 }
                 $fields[] = 'area_geojson = ?';

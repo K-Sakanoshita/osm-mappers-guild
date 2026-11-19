@@ -27,7 +27,6 @@
 
 1. `api/` フォルダをサーバへアップロードします（例: `~/www/mappers-guild/api/`）。
 2. `api/config.sample.php` を `api/config.php` にコピーし、実値を設定します。
-   - `app_env` は `production`
    - `db_dsn` / `db_user` / `db_pass` に MySQL の接続情報
    - `frontend_url` にフロントエンドの公開URL（ログイン後に戻る先）
    - `frontend_origins` にフロントエンドのオリジン（例: `https://<ユーザー名>.github.io`、独自ドメイン取得後はそのオリジン）
@@ -96,4 +95,4 @@ POSTはログインと `X-CSRF-Token` が必要です。同じユーザーが同
 5. 依頼者がマッパーの成果を承認し、その成果へのいいね・取り消しを確認
 6. 未ログイン時は件数のみ表示、本人の依頼・成果にはいいねできないことを確認
 
-テスト環境では `python3 tests/smoke_test.py` を再実行します。
+テスト環境では `bash tests/run_smoke_test.sh` を実行します。

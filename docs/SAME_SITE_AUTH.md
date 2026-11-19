@@ -59,7 +59,6 @@ curl -i -H 'Origin: https://guild.openacrossbase.net' \
 ],
 'public_api_url' => 'https://guild-api.openacrossbase.net/api',
 'cookie_samesite' => 'Lax',
-'app_env' => 'production',
 ```
 
 MySQL・OSM Client ID/Secretなどの既存設定はそのまま利用する。

@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
-"""OSM Mappers Guild API スモークテスト（dev-login使用）。"""
+"""OSM Mappers Guild API スモークテスト（tests/run_smoke_test.sh から実行）。"""
 import json, sys, urllib.request, urllib.error, http.cookiejar
+from pathlib import Path
+import sqlite3
+import subprocess
 
 BASE = "http://127.0.0.1:8099/api/index.php"
+TEST_DIR = Path(sys.argv[1])
 passed = failed = 0
 
 def client():
     cj = http.cookiejar.CookieJar()
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+
+def authenticated_client(user_id):
+    session_id = subprocess.check_output([
+        "php", "-d", f"session.save_path={TEST_DIR / 'sessions'}",
+        "-r", 'session_start(); $_SESSION["user_id"] = (int)$argv[1]; '
+              'session_write_close(); echo session_id();',
+        str(user_id),
+    ], text=True)
+    opener = client()
+    opener.addheaders.append(("Cookie", f"MGSESSID={session_id}"))
+    return opener
 
 def call(op, method, path, body=None, csrf=None, raw_headers=None):
     url = BASE + path
@@ -41,22 +56,31 @@ def check(name, cond, extra=""):
 
 RECT = {"type": "Polygon", "coordinates": [[[135.49, 34.68], [135.52, 34.68], [135.52, 34.71], [135.49, 34.71], [135.49, 34.68]]]}
 
+with sqlite3.connect(TEST_DIR / "guild.sqlite") as db:
+    schema = Path(__file__).resolve().parents[1] / "db/schema.sqlite.sql"
+    db.executescript(schema.read_text(encoding="utf-8"))
+    db.executemany(
+        "INSERT INTO users (id, osm_user_id, display_name, created_at) VALUES (?, ?, ?, datetime('now'))",
+        [(1, 1001, "依頼者A"), (2, 2002, "マッパーB")],
+    )
+db.close()
+
 # --- health / me
 anon = client()
 s, d = call(anon, "GET", "/health")
 check("health", s == 200 and d.get("ok") is True, str(d))
 s, d = call(anon, "GET", "/me")
-check("me (logged out)", s == 200 and d.get("user") is None and d.get("dev_login_enabled") is True, str(d))
+check("me (logged out)", s == 200 and d.get("user") is None and "dev_login_enabled" not in d, str(d))
+s, d = call(anon, "POST", "/auth/dev-login",
+            {"osm_user_id": 1001, "display_name": "依頼者A"}, d["csrf_token"])
+check("removed login route -> 404", s == 404, str(d))
 
 # --- 未ログインの変更は401
 s, d = call(anon, "POST", "/requests", {"title": "x"})
 check("POST while logged out -> 401", s == 401, str(s))
 
-# --- 依頼者Aでログイン
-A = client()
-s, d = call(A, "GET", "/me"); csrfA = d["csrf_token"]
-s, d = call(A, "POST", "/auth/dev-login", {"osm_user_id": 1001, "display_name": "依頼者A"}, csrfA)
-check("dev-login A", s == 200 and d["user"]["display_name"] == "依頼者A", str(d))
+# --- 依頼者Aのテストセッション
+A = authenticated_client(1)
 s, d = call(A, "GET", "/me"); csrfA = d["csrf_token"]
 check("me A", d["user"]["osm_user_id"] == 1001, str(d))
 
@@ -87,12 +111,10 @@ s, d = call(A, "POST", "/requests", {
 req2_id = d["request"]["id"]
 check("create request 2", s == 201, str(d))
 
-# --- マッパーBでログイン
-B = client()
+# --- マッパーBのテストセッション
+B = authenticated_client(2)
 s, d = call(B, "GET", "/me"); csrfB = d["csrf_token"]
-s, d = call(B, "POST", "/auth/dev-login", {"osm_user_id": 2002, "display_name": "マッパーB"}, csrfB)
-check("dev-login B", s == 200, str(d))
-s, d = call(B, "GET", "/me"); csrfB = d["csrf_token"]
+check("me B", d["user"]["osm_user_id"] == 2002, str(d))
 
 # --- 参加フロー
 s, d = call(B, "POST", f"/requests/{req_id}/join", {}, csrfB)
@@ -215,6 +237,30 @@ s, d = call(A, "POST", f"/assignments/{aid}/like", {"active": True}, csrfA)
 check("cannot like withdrawn work", s == 409, str(d))
 s, d = call(A, "POST", f"/assignments/{aid}/like", {"active": False}, csrfA)
 check("can remove like after withdrawal", s == 200 and d.get("like_count") == 0, str(d))
+
+# --- 場所指定なしの依頼
+s, d = call(A, "POST", "/requests", {
+    "title": "病院を10件追加", "description": "世界中のどこでも対象です",
+    "category": "店舗・施設", "area": None}, csrfA)
+check("create worldwide request", s == 201 and d["request"]["area"] is None, str(d))
+worldwide_id = d["request"]["id"]
+worldwide_path = f"/requests/{worldwide_id}"
+s, d = call(anon, "GET", "/requests?status=open")
+check("list includes worldwide request", s == 200 and any(
+    r["id"] == worldwide_id and r["area"] is None for r in d["requests"]), str(d))
+s, d = call(A, "PATCH", worldwide_path, {"area": RECT}, csrfA)
+check("add an area to a worldwide request", s == 200 and d["request"]["area"] == RECT, str(d))
+s, d = call(A, "PATCH", worldwide_path, {"title": "病院を追加"}, csrfA)
+check("editing other fields preserves area", s == 200 and d["request"]["area"] == RECT, str(d))
+s, d = call(A, "PATCH", worldwide_path, {"area": None}, csrfA)
+check("change back to worldwide", s == 200 and d["request"]["area"] is None, str(d))
+s, d = call(anon, "GET", worldwide_path)
+check("worldwide request detail", s == 200 and d["request"]["area"] is None, str(d))
+s, d = call(B, "POST", worldwide_path + "/join", {}, csrfB)
+check("join worldwide request", s == 200, str(d))
+s, d = call(B, "POST", worldwide_path + "/report", {
+    "comment": "追加しました", "changeset_ids": [123456]}, csrfB)
+check("report on worldwide request", s == 200, str(d))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

@@ -6,7 +6,8 @@
 <title>OSM Mappers Guild | マッピング依頼とマッパーをつなぐ</title>
 <meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
-<link rel="stylesheet" href="./style.css?v=20261117-3">
+<link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
+<link rel="stylesheet" href="./style.css?v=20261119-2">
 </head>
 <body>
 <header class="app-header">
@@ -15,19 +16,10 @@
     <p class="tagline">マッピング依頼とマッパーをつなぐ</p>
   </div>
   <div class="header-actions">
-    <span id="user-info" class="user-info"></span>
-    <button id="btn-new-request" class="btn btn-primary" type="button">依頼を投稿</button>
     <button id="btn-login" class="btn" type="button">OSMでログイン</button>
-    <button id="btn-logout" class="btn" type="button" hidden>ログアウト</button>
+    <button id="btn-mypage" class="btn" type="button" hidden>マイページ</button>
   </div>
 </header>
-
-<div id="dev-login" class="dev-login" hidden>
-  <strong>開発用ログイン</strong>（OSM OAuth未設定の環境でのみ表示されます）
-  <label>OSMユーザーID <input id="dev-osm-id" type="number" min="1" value="1001"></label>
-  <label>表示名 <input id="dev-name" type="text" value="テスト依頼者"></label>
-  <button id="btn-dev-login" class="btn" type="button">開発ログイン</button>
-</div>
 
 <main class="layout">
   <aside class="sidebar">
@@ -35,7 +27,7 @@
       <label>状態
         <select id="filter-status">
           <option value="">すべて</option>
-          <option value="open">募集中</option>
+          <option value="open" selected>募集中</option>
           <option value="in_progress">作業中</option>
           <option value="awaiting_review">確認待ち</option>
           <option value="changes_requested">修正依頼</option>
@@ -52,11 +44,11 @@
         <button id="filter-joining" class="btn btn-small" type="button">参加中</button>
       </div>
     </div>
+    <h2 class="list-heading">依頼一覧</h2>
     <div id="request-list" class="request-list"></div>
   </aside>
   <section class="map-wrap">
     <div id="map"></div>
-    <p class="map-note">地図データ: © OpenStreetMap contributors</p>
   </section>
 </main>
 
@@ -73,6 +65,6 @@
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="./config.js?v=20261115-1"></script>
-<script src="./app.js?v=20261117-4"></script>
+<script src="./app.js?v=20261119-3"></script>
 </body>
 </html>

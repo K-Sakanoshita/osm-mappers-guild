@@ -1,6 +1,6 @@
 'use strict';
 /* OSM Mappers Guild フロントエンド (Phase 1 MVP)
- * ビルド不要の素のJavaScript。地図は MapLibre GL JS + OSMラスタタイル。
+ * ビルド不要の素のJavaScript。地図は MapLibre GL JS + OSMFJベクタータイル。
  */
 
 const API_BASE = (window.GUILD_CONFIG && window.GUILD_CONFIG.apiBase) || '/api/index.php';
@@ -29,6 +29,7 @@ const EVENT_LABELS = {
   approve: '承認',
   request_changes: '修正依頼',
 };
+const WORLDWIDE_LABEL = '場所を指定しない（世界中）';
 
 const state = {
   me: null,
@@ -81,38 +82,14 @@ async function api(path, opts = {}) {
 
 const map = new maplibregl.Map({
   container: 'map',
-  style: {
-    version: 8,
-    sources: {
-      osm: {
-        type: 'raster',
-        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-        tileSize: 256,
-        attribution: '© OpenStreetMap contributors',
-      },
-    },
-    layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
-  },
+  style: './tiles/osmfj_poi.json',
   center: [135.5023, 34.6937], // 大阪
   zoom: 11,
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
+const requestPins = [];
 
 map.on('load', () => {
-  map.addSource('areas', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-  map.addLayer({
-    id: 'areas-fill', type: 'fill', source: 'areas',
-    paint: {
-      'fill-color': ['match', ['get', 'status'],
-        'open', '#2e7d32', 'in_progress', '#1565c0', 'awaiting_review', '#ef6c00',
-        'changes_requested', '#b3261e', 'completed', '#616161', '#9e9e9e'],
-      'fill-opacity': 0.22,
-    },
-  });
-  map.addLayer({
-    id: 'areas-line', type: 'line', source: 'areas',
-    paint: { 'line-color': '#22303a', 'line-width': 1.2, 'line-opacity': 0.6 },
-  });
   map.addSource('pick', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
     id: 'pick-fill', type: 'fill', source: 'pick',
@@ -126,21 +103,15 @@ map.on('load', () => {
 });
 
 map.on('click', (e) => {
-  if (state.pick.active) {
-    state.pick.corners.push([e.lngLat.lng, e.lngLat.lat]);
-    if (state.pick.corners.length === 2) {
-      drawPick();
-      finishPicking();
-      updateAreaBox();
-      toast('範囲を設定しました');
-    } else {
-      $('pick-instruction').textContent = 'もう1点（対角）をタップしてください';
-    }
-    return;
-  }
-  const feats = map.queryRenderedFeatures(e.point, { layers: ['areas-fill'] });
-  if (feats.length > 0 && feats[0].properties && feats[0].properties.id) {
-    openDetail(Number(feats[0].properties.id));
+  if (!state.pick.active) return;
+  state.pick.corners.push([e.lngLat.lng, e.lngLat.lat]);
+  if (state.pick.corners.length === 2) {
+    drawPick();
+    finishPicking();
+    updateAreaBox();
+    toast('範囲を設定しました');
+  } else {
+    $('pick-instruction').textContent = 'もう1点（対角）をタップしてください';
   }
 });
 
@@ -156,7 +127,7 @@ function rectPolygon(a, b) {
 function drawPick() {
   const src = map.getSource('pick');
   if (!src) return;
-  if (state.pick.corners.length === 2) {
+  if ($('f-area-mode')?.value !== 'worldwide' && state.pick.corners.length === 2) {
     const poly = rectPolygon(state.pick.corners[0], state.pick.corners[1]);
     src.setData({ type: 'FeatureCollection', features: [{ type: 'Feature', geometry: poly, properties: {} }] });
   } else {
@@ -169,6 +140,11 @@ function pickedArea() {
   return rectPolygon(state.pick.corners[0], state.pick.corners[1]);
 }
 
+function clearPickedArea() {
+  state.pick.corners = [];
+  drawPick();
+}
+
 function finishPicking() {
   state.pick.active = false;
   document.body.classList.remove('picking');
@@ -177,28 +153,38 @@ function finishPicking() {
   map.resize();
 }
 
-function refreshAreas() {
-  const src = map.getSource('areas');
-  if (!src) return;
-  src.setData({
-    type: 'FeatureCollection',
-    features: state.requests.map((r) => ({
-      type: 'Feature',
-      geometry: r.area,
-      properties: { id: r.id, status: r.status },
-    })),
-  });
+function refreshRequestPins() {
+  requestPins.forEach((pin) => pin.remove());
+  requestPins.length = 0;
+  for (const request of state.requests) {
+    const bounds = areaBounds(request.area);
+    if (!bounds) continue;
+    const [[west, south], [east, north]] = bounds;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'request-pin';
+    button.textContent = '📌';
+    button.addEventListener('click', () => {
+      if (!state.pick.active) openDetail(request.id);
+    });
+    requestPins.push(new maplibregl.Marker({ element: button, anchor: 'bottom' })
+      .setLngLat([(west + east) / 2, (south + north) / 2])
+      .addTo(map));
+    button.setAttribute('aria-label', request.title);
+  }
+}
+
+function areaBounds(area) {
+  const pts = area?.coordinates?.[0];
+  if (!pts?.length) return null;
+  const lngs = pts.map((p) => p[0]);
+  const lats = pts.map((p) => p[1]);
+  return [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]];
 }
 
 function fitToArea(area) {
-  if (!area || !area.coordinates || !area.coordinates[0]) return;
-  const pts = area.coordinates[0];
-  const lngs = pts.map((p) => p[0]);
-  const lats = pts.map((p) => p[1]);
-  map.fitBounds(
-    [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
-    { padding: 60, maxZoom: 16 }
-  );
+  const bounds = areaBounds(area);
+  if (bounds) map.fitBounds(bounds, { padding: 60, maxZoom: 16 });
 }
 
 // -------------------------------------------------------------------- list
@@ -215,7 +201,7 @@ async function loadRequests() {
     const data = await api('/requests?' + params.toString());
     state.requests = data.requests;
     renderList();
-    refreshAreas();
+    refreshRequestPins();
   } catch (e) {
     $('request-list').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>';
   }
@@ -233,6 +219,7 @@ function renderList() {
       <div class="meta">
         <span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span>
         <span>${esc(r.category)}</span>
+        ${r.area == null ? `<span>${WORLDWIDE_LABEL}</span>` : ''}
         <span>依頼者: ${esc(r.owner_name)}</span>
         <span>参加 ${r.participant_count} 人</span>
         <span>依頼へのいいね ${Number(r.support_count || 0)} 件</span>
@@ -246,19 +233,70 @@ function renderList() {
 
 // ------------------------------------------------------------------ detail
 
+let panelRevision = 0;
 function openPanel(html) {
+  panelRevision++;
   $('panel-content').innerHTML = html;
   $('panel').hidden = false;
+  $('panel').scrollTop = 0;
 }
 function closePanel() {
+  panelRevision++;
   $('panel').hidden = true;
   state.detail = null;
   state.editingId = null;
+  clearPickedArea();
+}
+
+async function openMyPage() {
+  if (!state.me) { toast('ログインが必要です'); return; }
+  clearPickedArea();
+  state.detail = null;
+  state.editingId = null;
+  openPanel(`
+    <h2>マイページ</h2>
+    <p class="mypage-user">${esc(state.me.display_name)} さん</p>
+    <button id="btn-logout" class="btn btn-small" type="button">ログアウト</button>
+    <section aria-labelledby="mypage-owned-heading">
+      <h3 id="mypage-owned-heading">自分の依頼</h3>
+      <button id="btn-new-request" class="btn btn-primary mypage-new-request" type="button">依頼を投稿</button>
+      <div id="mypage-owned" aria-live="polite">読み込み中…</div>
+    </section>
+    <section aria-labelledby="mypage-joined-heading">
+      <h3 id="mypage-joined-heading">参加した依頼</h3>
+      <div id="mypage-joined" aria-live="polite">読み込み中…</div>
+    </section>`);
+  const revision = panelRevision;
+  $('btn-logout').addEventListener('click', logout);
+  $('btn-new-request').addEventListener('click', () => openForm(null));
+  const sections = [
+    { id: 'mypage-owned', path: '/requests?owner=me', empty: '投稿した依頼はありません。' },
+    { id: 'mypage-joined', path: '/requests?participating=me', empty: '参加した依頼はありません。' },
+  ];
+  await Promise.all(sections.map(async (section) => {
+    try {
+      const data = await api(section.path);
+      if (revision !== panelRevision || !state.me) return;
+      const container = $(section.id);
+      if (!data.requests.length) { container.innerHTML = '<p class="hint">' + section.empty + '</p>'; return; }
+      container.innerHTML = data.requests.map((r) => `
+        <button class="mypage-card" type="button" data-request-id="${Number(r.id)}">
+          <strong>${esc(r.title)}</strong>
+          <span class="mypage-card-meta"><span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span> ${esc(r.category)}${r.area == null ? ` / ${WORLDWIDE_LABEL}` : ''}</span>
+        </button>`).join('') + (data.requests.length >= 100 ? '<p class="hint">最新の100件を表示しています。</p>' : '');
+      container.querySelectorAll('[data-request-id]').forEach((card) => {
+        card.addEventListener('click', () => openDetail(Number(card.dataset.requestId)));
+      });
+    } catch (e) {
+      if (revision === panelRevision && state.me) $(section.id).innerHTML = '<p class="error-text">取得できませんでした: ' + esc(e.message) + '</p>';
+    }
+  }));
 }
 
 async function openDetail(id) {
   try {
     const data = await api('/requests/' + id);
+    clearPickedArea();
     state.detail = data;
     renderDetail();
     fitToArea(data.request.area);
@@ -275,14 +313,12 @@ function changesetLinks(ids) {
 }
 
 function changesetSearchUrl(userId, area) {
-  const points = area.coordinates[0];
-  const lngs = points.map((point) => point[0]);
-  const lats = points.map((point) => point[1]);
   const params = new URLSearchParams({
     user: String(userId),
-    bbox: [Math.min(...lngs), Math.min(...lats), Math.max(...lngs), Math.max(...lats)].join(','),
     limit: '100',
   });
+  const bounds = areaBounds(area);
+  if (bounds) params.set('bbox', bounds.flat().join(','));
   return 'https://api.openstreetmap.org/api/0.6/changesets.json?' + params;
 }
 
@@ -299,6 +335,7 @@ function renderDetail() {
     <div class="meta">
       <span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span>
       <span>${esc(r.category)}</span>
+      ${r.area == null ? `<span>${WORLDWIDE_LABEL}</span>` : ''}
       <span>依頼者: ${esc(r.owner_name)}</span>
       <span>更新: ${esc(r.updated_at)}</span>
     </div>
@@ -429,7 +466,7 @@ function renderDetail() {
         </label>
         <div class="changeset-picker">
           <strong>Changeset（必須、複数選択可）</strong>
-          <p class="hint">対象エリアと重なるあなたの Changeset を取得します。依頼に関係するものを選んでください。</p>
+          <p class="hint">${r.area ? '対象エリアと重なるあなたの Changeset を取得します。' : 'あなたの最近の Changeset を取得します。'}依頼に関係するものを選んでください。</p>
           <button id="report-fetch-changesets" class="btn btn-small" type="button">Changeset を取得</button>
           <div id="report-changeset-list" aria-live="polite"></div>
         </div>
@@ -450,7 +487,7 @@ function renderDetail() {
         if (!Array.isArray(data.changesets)) throw new Error('OSM API の応答形式が正しくありません');
         const changesets = data.changesets.filter((cs) => Number.isSafeInteger(cs.id) && cs.id > 0 && cs.changes_count > 0);
         if (!changesets.length) {
-          list.textContent = '対象エリアに該当する Changeset が見つかりませんでした。';
+          list.textContent = r.area ? '対象エリアに該当する Changeset が見つかりませんでした。' : 'あなたの Changeset が見つかりませんでした。';
           return;
         }
         list.innerHTML = changesets.map((cs) => {
@@ -516,10 +553,8 @@ function updateAreaBox() {
     box.textContent = '未設定です。「地図で範囲を指定」を押し、地図で対角の2点を選んでください。';
     return;
   }
-  const pts = area.coordinates[0];
-  const lngs = pts.map((p) => p[0]);
-  const lats = pts.map((p) => p[1]);
-  box.textContent = `設定済み: 経度 ${Math.min(...lngs).toFixed(5)}〜${Math.max(...lngs).toFixed(5)} / 緯度 ${Math.min(...lats).toFixed(5)}〜${Math.max(...lats).toFixed(5)}`;
+  const [[west, south], [east, north]] = areaBounds(area);
+  box.textContent = `設定済み: 経度 ${west.toFixed(5)}〜${east.toFixed(5)} / 緯度 ${south.toFixed(5)}〜${north.toFixed(5)}`;
 }
 
 function openForm(existing) {
@@ -528,21 +563,10 @@ function openForm(existing) {
     return;
   }
   state.editingId = existing ? existing.id : null;
-  state.pick.corners = [];
+  const bounds = areaBounds(existing?.area);
+  const worldwide = !!existing && !bounds;
+  state.pick.corners = bounds || [];
   state.pick.active = false;
-  if (existing && existing.area) {
-    const pts = existing.area.coordinates[0];
-    const lngs = pts.map((p) => p[0]);
-    const lats = pts.map((p) => p[1]);
-    state.pick.corners = [
-      [Math.min(...lngs), Math.min(...lats)],
-      [Math.max(...lngs), Math.max(...lats)],
-    ];
-    drawPick();
-    fitToArea(existing.area);
-  } else {
-    drawPick();
-  }
 
   openPanel(`
     <h2>${existing ? '依頼を編集' : '依頼を投稿'}</h2>
@@ -556,14 +580,19 @@ function openForm(existing) {
         </select>
       </label>
       <label>説明
-        <textarea id="f-description" rows="7" required maxlength="5000" placeholder="対象地域で確認・編集してほしい内容を書いてください">${existing ? esc(existing.description) : ''}</textarea>
+        <textarea id="f-description" rows="7" required maxlength="5000" placeholder="確認・編集してほしい内容を書いてください">${existing ? esc(existing.description) : ''}</textarea>
       </label>
       <label>報酬・謝礼（任意）
         <input id="f-reward" type="text" maxlength="300" value="${existing && existing.reward_text ? esc(existing.reward_text) : ''}" placeholder="例: 交通費実費を負担します">
         <span class="hint">金銭・物品・交通費負担などを自由に記載できます。受け渡しは当事者間で行い、ギルドは決済・支払い保証・仲介を行いません。</span>
       </label>
-      <div class="area-box">
-        <div>対象エリア（矩形）</div>
+      <label>対象エリア
+        <select id="f-area-mode">
+          <option value="area">地図で範囲を指定</option>
+          <option value="worldwide"${worldwide ? ' selected' : ''}>${WORLDWIDE_LABEL}</option>
+        </select>
+      </label>
+      <div id="f-area-options" class="area-box"${worldwide ? ' hidden' : ''}>
         <p id="form-area-summary" class="hint"></p>
         <button id="f-pick" class="btn btn-small" type="button">地図で範囲を指定</button>
         <button id="f-pick-clear" class="btn btn-small" type="button">範囲をクリア</button>
@@ -573,7 +602,15 @@ function openForm(existing) {
       <button class="btn btn-primary" type="submit">${existing ? '保存する' : '投稿する'}</button>
     </form>`);
   updateAreaBox();
+  drawPick();
+  if (bounds) fitToArea(existing.area);
 
+  const areaMode = $('f-area-mode');
+  areaMode.addEventListener('change', () => {
+    $('f-area-options').hidden = areaMode.value === 'worldwide';
+    $('form-error').textContent = '';
+    drawPick();
+  });
   $('f-pick').addEventListener('click', () => {
     state.pick.previousCorners = state.pick.corners.map((corner) => [...corner]);
     state.pick.corners = [];
@@ -586,16 +623,16 @@ function openForm(existing) {
     map.resize();
   });
   $('f-pick-clear').addEventListener('click', () => {
-    state.pick.corners = [];
     state.pick.active = false;
-    drawPick();
+    clearPickedArea();
     updateAreaBox();
   });
 
   $('request-form').addEventListener('submit', async (ev) => {
     ev.preventDefault();
-    const area = pickedArea();
-    if (!area) {
+    const needsArea = areaMode.value === 'area';
+    const area = needsArea ? pickedArea() : null;
+    if (needsArea && !area) {
       $('form-error').textContent = '対象エリアを設定してください';
       return;
     }
@@ -643,7 +680,6 @@ async function loadMe() {
     const catSel = $('filter-category');
     catSel.innerHTML = '<option value="">すべて</option>' +
       state.categories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
-    $('dev-login').hidden = !data.dev_login_enabled;
     renderAuth();
   } catch (e) {
     toast('APIに接続できません: ' + e.message);
@@ -652,39 +688,25 @@ async function loadMe() {
 
 function renderAuth() {
   const me = state.me;
-  $('user-info').textContent = me ? `${me.display_name} さん` : '未ログイン';
   $('btn-login').hidden = !!me;
-  $('btn-logout').hidden = !me;
+  $('btn-mypage').hidden = !me;
 }
 
 $('btn-login').addEventListener('click', () => {
   window.location.href = API_BASE + '/auth/login';
 });
-$('btn-logout').addEventListener('click', async () => {
+async function logout() {
   try {
     await api('/auth/logout', { method: 'POST', body: {} });
     state.me = null;
+    state.filterMode = 'all';
     renderAuth();
     closePanel();
     loadRequests();
     toast('ログアウトしました');
   } catch (e) { toast(e.message); }
-});
-$('btn-dev-login').addEventListener('click', async () => {
-  try {
-    const res = await api('/auth/dev-login', {
-      method: 'POST',
-      body: { osm_user_id: Number($('dev-osm-id').value), display_name: $('dev-name').value },
-    });
-    state.me = res.user;
-    // dev-login でセッションが再生成され CSRF が変わるため /me を取り直す
-    await loadMe();
-    renderAuth();
-    loadRequests();
-    toast('開発ログインしました');
-  } catch (e) { toast(e.message); }
-});
-$('btn-new-request').addEventListener('click', () => openForm(null));
+}
+$('btn-mypage').addEventListener('click', openMyPage);
 $('panel-close').addEventListener('click', closePanel);
 $('filter-status').addEventListener('change', loadRequests);
 $('filter-category').addEventListener('change', loadRequests);

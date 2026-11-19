@@ -4,12 +4,9 @@
 // config.php は .gitignore 済みで、リポジトリには含めません。
 //
 // 環境変数でも上書きできます（MG_DB_DSN, MG_DB_USER, MG_DB_PASS,
-// MG_OSM_CLIENT_ID, MG_OSM_CLIENT_SECRET, MG_FRONTEND_URL, MG_APP_ENV）。
+// MG_OSM_CLIENT_ID, MG_OSM_CLIENT_SECRET, MG_FRONTEND_URL）。
 
 return [
-    // 'production' または 'dev'。dev のときだけ /auth/dev-login が有効になる。
-    'app_env' => getenv('MG_APP_ENV') ?: 'production',
-
     // DB接続。MySQL: 'mysql:host=localhost;dbname=xxxx;charset=utf8mb4'
     // 開発用SQLite: 'sqlite:/path/to/guild.sqlite'
     'db_dsn'  => getenv('MG_DB_DSN') ?: 'mysql:host=localhost;dbname=CHANGE_ME;charset=utf8mb4',

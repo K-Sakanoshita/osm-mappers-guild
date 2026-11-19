@@ -10,7 +10,7 @@
 
 | パス | 内容 |
 |---|---|
-| `frontend/` | 静的フロントエンド（ビルド不要、MapLibre GL JS + OSM実データ）。GitHub Pages で公開 |
+| `frontend/` | 静的フロントエンド（ビルド不要、MapLibre GL JS + OSMFJベクタータイル）。GitHub Pages で公開 |
 | `api/` | PHP API（OSM OAuth 2.0 ログイン、依頼・参加・報告・承認） |
 | `db/` | DBスキーマ（本番 MySQL / 開発用 SQLite） |
 | `docs/` | 開発・配置手順 |

@@ -29,31 +29,8 @@ jobs:
           node --check frontend/app.js
           node tests/social_ui_test.cjs
           node tests/social_draft_test.cjs
+          node tests/mypage_test.cjs
+          node tests/changeset_picker_test.cjs
           python3 tests/likes_migration_test.py
       - name: Run PHP API smoke tests
-        run: |
-          python3 - <<'PY'
-          import sqlite3
-          with sqlite3.connect("test-guild.sqlite") as db:
-              db.executescript(open("db/schema.sqlite.sql", encoding="utf-8").read())
-          PY
-          cat > api/config.php <<'PHP'
-          <?php
-          return [
-              'app_env' => 'dev',
-              'db_dsn' => 'sqlite:' . dirname(__DIR__) . '/test-guild.sqlite',
-              'db_user' => '',
-              'db_pass' => '',
-              'frontend_url' => 'http://127.0.0.1:8099/frontend',
-              'frontend_origins' => ['http://127.0.0.1:8099'],
-              'public_api_url' => 'http://127.0.0.1:8099/api/index.php',
-              'osm_client_id' => '',
-              'osm_client_secret' => '',
-              'cookie_samesite' => 'Lax',
-          ];
-          PHP
-          php -S 127.0.0.1:8099 -t . > /tmp/mg-api-test.log 2>&1 &
-          echo $! > /tmp/mg-api-test.pid
-          trap 'cat /tmp/mg-api-test.log; kill "$(cat /tmp/mg-api-test.pid)" || true' EXIT
-          sleep 2
-          python3 tests/smoke_test.py
+        run: bash tests/run_smoke_test.sh
