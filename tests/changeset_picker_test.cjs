@@ -6,6 +6,7 @@ const elements = {};
 function el(id) {
   return elements[id] ||= {
     hidden: false, value: '', textContent: '', innerHTML: '', disabled: false, boxes: [],
+    removeAttribute() {},
     addEventListener(type, fn) { this[type] = fn; },
     querySelectorAll() { return this.boxes; },
   };
@@ -13,7 +14,7 @@ function el(id) {
 const map = { on() {}, addControl() {}, getSource() {}, resize() {}, fitBounds() {} };
 let mode = 'success', requestedUrl = '', sentBody = null;
 const context = {
-  document: { getElementById: el, querySelectorAll: () => [], body: { classList: { add() {}, remove() {} } } },
+  document: { addEventListener() {}, getElementById: el, querySelectorAll: () => [], body: { classList: { add() {}, remove() {} } } },
   window: {}, maplibregl: { Map: function () { return map; }, NavigationControl: function () {} },
   URLSearchParams, setTimeout() {}, console,
   fetch: async (url, opts = {}) => {

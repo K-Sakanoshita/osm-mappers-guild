@@ -1,10 +1,10 @@
 'use strict';
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const els = {};
-function el(id) { return els[id] ||= {innerHTML:'', textContent:'', value:'', hidden:false, isConnected:true, disabled:false, addEventListener(t,f){this[t]=f;}, remove(){this.isConnected=false;}, querySelectorAll(){return []}}; }
+function el(id) { return els[id] ||= {innerHTML:'', textContent:'', value:'', hidden:false, isConnected:true, disabled:false, removeAttribute(){}, addEventListener(t,f){this[t]=f;}, remove(){this.isConnected=false;}, querySelectorAll(){return []}}; }
 let resolvePost;
 const map = {on(){},addControl(){},getSource(){},fitBounds(){},resize(){}};
-const context = { document:{getElementById:el,querySelectorAll:()=>[],body:{classList:{add(){},remove(){}}}}, window:{}, maplibregl:{Map:function(){return map;},NavigationControl:function(){}}, URLSearchParams, setTimeout(){}, fetch:async (url, opts={}) => {
+const context = { document:{ addEventListener() {}, getElementById:el,querySelectorAll:()=>[],body:{classList:{add(){},remove(){}}}}, window:{}, maplibregl:{Map:function(){return map;},NavigationControl:function(){}}, URLSearchParams, setTimeout(){}, fetch:async (url, opts={}) => {
   if (opts.method === 'POST') return new Promise(resolve => {resolvePost=()=>resolve({ok:true,json:async()=>({support_count:1,supported_by_me:true})});});
   return {ok:true,json:async()=>({user:null,categories:[],requests:[]})};
 }};

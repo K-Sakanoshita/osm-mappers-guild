@@ -7,7 +7,7 @@
 <meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
 <link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
-<link rel="stylesheet" href="./style.css?v=20261121-1">
+<link rel="stylesheet" href="./style.css?v=20261122-1">
 </head>
 <body>
 <header class="app-header">
@@ -17,7 +17,19 @@
   </div>
   <div class="header-actions">
     <button id="btn-login" class="btn" type="button">OSMでログイン</button>
-    <button id="btn-mypage" class="btn" type="button" hidden>マイページ</button>
+    <details id="account-menu" class="account-menu" hidden>
+      <summary id="account-toggle" class="btn account-toggle">
+        <span class="account-avatar" aria-hidden="true">
+          <span id="account-initial"></span>
+          <img id="account-image" alt="" referrerpolicy="no-referrer" hidden>
+        </span>
+        <span id="account-name" class="account-name"></span>
+        <span class="account-caret" aria-hidden="true"></span>
+      </summary>
+      <div class="account-options">
+        <button id="btn-mypage" type="button">マイページ</button>
+      </div>
+    </details>
   </div>
 </header>
 
@@ -68,6 +80,6 @@
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="./config.js?v=20261115-1"></script>
-<script src="./app.js?v=20261121-1"></script>
+<script src="./app.js?v=20261122-1"></script>
 </body>
 </html>

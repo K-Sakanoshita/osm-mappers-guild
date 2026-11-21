@@ -1,14 +1,18 @@
 'use strict';
 const assert = require('assert'), fs = require('fs'), vm = require('vm');
 const elements = {};
-function el(id) { return elements[id] ||= { hidden:false, value:'', innerHTML:'', textContent:'', addEventListener(t, f) { this[t] = f; }, querySelector() { return null; } }; }
+function el(id) { return elements[id] ||= { hidden:false, value:'', innerHTML:'', textContent:'', focus() {}, removeAttribute(name) { delete this[name]; }, addEventListener(t, f) { this[t] = f; }, querySelector() { return null; } }; }
 const map = { on() {}, addControl() {}, getSource() {}, fitBounds() {}, resize() {} };
 const calls = [];
 let deferred = null;
 const response = (data) => ({ok:true, json: async () => data});
-const context = { document: {getElementById:el, querySelectorAll:()=>[], body:{classList:{add(){},remove(){}}}}, window:{}, maplibregl:{Map:function(){return map;},NavigationControl:function(){}}, URLSearchParams, setTimeout(){}, fetch: async (url, options={}) => {
+const context = { document: { addEventListener() {}, getElementById:el, querySelectorAll:()=>[], body:{classList:{add(){},remove(){}}}}, window:{}, maplibregl:{Map:function(){return map;},NavigationControl:function(){}}, URLSearchParams, setTimeout(){}, fetch: async (url, options={}) => {
   calls.push(url);
   if (url.endsWith('/me')) return response({user:{id:1,osm_user_id:10,display_name:'<利用者>'},csrf_token:'token',categories:[]});
+  if (url.endsWith('/user/10.json')) {
+    assert.equal(options.credentials, 'omit');
+    return response({user:{img:{href:'https://example.org/avatar.png'}}});
+  }
   if (url.includes('owner=me')) {
     assert(!url.includes('bbox='));
     if (url.includes('cursor=older')) return response({requests:[{id:3,title:'以前の自分の依頼',status:'completed',category:'建物'}],next_cursor:null});
@@ -21,8 +25,16 @@ const context = { document: {getElementById:el, querySelectorAll:()=>[], body:{c
 vm.createContext(context); vm.runInContext(fs.readFileSync('frontend/app.js','utf8'),context);
 (async()=>{
   await new Promise(setImmediate);
-  assert.equal(el('btn-login').hidden,true); assert.equal(el('btn-mypage').hidden,false);
+  assert.equal(el('btn-login').hidden,true); assert.equal(el('account-menu').hidden,false);
+  assert.equal(el('account-name').textContent, '<利用者>');
+  assert.equal(el('account-image').src, 'https://example.org/avatar.png');
+  el('account-image').load();
+  assert.equal(el('account-image').hidden, false);
+  el('account-image').error();
+  assert.equal(el('account-image').hidden, true);
+  el('account-menu').open = true;
   await el('btn-mypage').click();
+  assert.equal(el('account-menu').open, false);
   assert(calls.some(x=>x.includes('owner=me')) && calls.some(x=>x.includes('participating=me')));
   assert.match(el('panel-content').innerHTML,/&lt;利用者&gt;/);
   assert.match(el('mypage-owned').innerHTML,/&lt;自分の依頼&gt;/);
@@ -40,6 +52,7 @@ vm.createContext(context); vm.runInContext(fs.readFileSync('frontend/app.js','ut
   el('mypage-owned').innerHTML='保持'; deferred.resolve(); await pending;
   assert.equal(el('mypage-owned').innerHTML,'保持'); assert.match(el('panel-content').innerHTML,/別画面/);
   deferred=null; await el('btn-mypage').click(); await el('btn-logout').click();
-  assert.equal(el('btn-login').hidden,false); assert.equal(el('btn-mypage').hidden,true); assert.equal(el('panel').hidden,true);
+  assert.equal(el('btn-login').hidden,false); assert.equal(el('account-menu').hidden,true); assert.equal(el('panel').hidden,true);
+  assert.equal(el('account-image').src, undefined);
   console.log('マイページの一覧取得、画面遷移、ログアウト: OK');
 })().catch(e=>{console.error(e);process.exitCode=1});

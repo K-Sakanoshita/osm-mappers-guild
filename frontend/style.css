@@ -40,6 +40,36 @@ body {
 .btn-small { min-height: 34px; padding: 5px 10px; font-size: 13px; }
 .btn[disabled] { opacity: .5; cursor: default; }
 
+.account-menu { position: relative; }
+.account-toggle {
+  display: flex; align-items: center; gap: 7px;
+  max-width: min(260px, 44vw); padding: 6px 10px; list-style: none;
+}
+.account-toggle::-webkit-details-marker { display: none; }
+.account-avatar {
+  position: relative; display: grid; place-items: center; flex: 0 0 24px;
+  width: 24px; height: 24px; overflow: hidden; border-radius: 50%;
+  background: #e6f1e7; color: var(--primary-dark); font-weight: 600;
+}
+.account-avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.account-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-caret {
+  flex: none; width: 0; height: 0; border: 4px solid transparent;
+  border-top-color: var(--muted); border-bottom: 0;
+}
+.account-menu[open] .account-caret { transform: rotate(180deg); }
+.account-options {
+  position: absolute; top: calc(100% + 5px); right: 0; z-index: 5;
+  min-width: 140px; padding: 4px; border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; box-shadow: 0 3px 12px #0002;
+}
+.account-options button {
+  width: 100%; min-height: 36px; padding: 6px 10px;
+  border: 0; border-radius: 4px; background: transparent;
+  color: inherit; font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.account-options button:hover { background: #eef3f0; }
+
 .layout { flex: 1; display: grid; grid-template-columns: 400px 1fr; min-height: 0; }
 .sidebar { overflow-y: auto; background: #fff; border-right: 1px solid var(--border); padding: 12px; }
 .filters { display: grid; gap: 8px; margin-bottom: 12px; }
@@ -137,7 +167,7 @@ body.picking .map-wrap { position: fixed; inset: 0; z-index: 60; }
   .brand h1 { font-size: 17px; }
   .tagline { font-size: 11px; }
   .header-actions { display: contents; }
-  #btn-login, #btn-mypage { grid-column: 2; grid-row: 1; }
+  #btn-login, #account-menu { grid-column: 2; grid-row: 1; }
   .header-actions .btn { padding: 6px 10px; min-height: 38px; font-size: 13px; }
   .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 40%) minmax(0, 1fr); }
   .sidebar { min-height: 0; border-right: none; border-top: 1px solid var(--border); order: 2; padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); overscroll-behavior: contain; }

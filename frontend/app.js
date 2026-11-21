@@ -840,9 +840,55 @@ async function loadMe() {
 
 function renderAuth() {
   const me = state.me;
+  const menu = $('account-menu');
+  const image = $('account-image');
   $('btn-login').hidden = !!me;
-  $('btn-mypage').hidden = !me;
+  menu.hidden = !me;
+  menu.open = false;
+  image.hidden = true;
+  image.removeAttribute('src');
+  if (!me) return;
+
+  const name = me.display_name;
+  $('account-name').textContent = name;
+  $('account-toggle').title = name;
+  $('account-initial').textContent = [...name.trim()][0]?.toUpperCase() || '?';
+  loadAccountAvatar(me);
 }
+
+async function loadAccountAvatar(me) {
+  try {
+    const response = await fetch('https://api.openstreetmap.org/api/0.6/user/' + Number(me.osm_user_id) + '.json', {
+      credentials: 'omit',
+      referrerPolicy: 'no-referrer',
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    const href = data.user?.img?.href;
+    if (state.me === me && typeof href === 'string' && href.startsWith('https://')) {
+      $('account-image').src = href;
+    }
+  } catch {
+    // 画像が取得できない場合はユーザー名の先頭文字を表示する。
+  }
+}
+
+function dismissAccountMenu(event) {
+  const menu = $('account-menu');
+  if (!menu.open) return;
+  if (event.type === 'keydown') {
+    if (event.key !== 'Escape') return;
+    $('account-toggle').focus();
+  } else if (menu.contains(event.target)) {
+    return;
+  }
+  menu.open = false;
+}
+
+document.addEventListener('click', dismissAccountMenu);
+document.addEventListener('keydown', dismissAccountMenu);
+$('account-image').addEventListener('load', () => { $('account-image').hidden = false; });
+$('account-image').addEventListener('error', () => { $('account-image').hidden = true; });
 
 $('btn-login').addEventListener('click', () => {
   window.location.href = API_BASE + '/auth/login';
@@ -858,7 +904,12 @@ async function logout() {
     toast('ログアウトしました');
   } catch (e) { toast(e.message); }
 }
-$('btn-mypage').addEventListener('click', openMyPage);
+$('btn-mypage').addEventListener('click', () => {
+  $('account-menu').open = false;
+  const page = openMyPage();
+  $('panel-close').focus();
+  return page;
+});
 $('panel-close').addEventListener('click', closePanel);
 $('request-list').addEventListener('click', (event) => {
   const card = event.target.closest('.request-card');
