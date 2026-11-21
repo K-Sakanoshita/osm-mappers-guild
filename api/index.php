@@ -175,6 +175,53 @@ function valid_rectangle($area): bool
     return count(array_unique($lngs)) === 2 && count(array_unique($lats)) === 2;
 }
 
+function request_bbox($value): array
+{
+    if (!is_string($value) || strlen($value) > 128) {
+        fail(400, 'bbox の値が不正です');
+    }
+    $parts = explode(',', $value);
+    if (count($parts) !== 4) {
+        fail(400, 'bbox の値が不正です');
+    }
+    foreach ($parts as $part) {
+        if (!preg_match('/\A[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?\z/', $part)
+            || !is_finite((float)$part)) {
+            fail(400, 'bbox の値が不正です');
+        }
+    }
+    [$west, $south, $east, $north] = array_map('floatval', $parts);
+    if (abs($west) > 180 || abs($east) > 180 || $south < -90 || $north > 90
+        || $south >= $north || $west === $east || ($west === 180.0 && $east === -180.0)) {
+        fail(400, 'bbox の範囲が不正です');
+    }
+    return [$west, $south, $east, $north];
+}
+
+function rectangle_edge_sql(bool $sqlite, int $axis, bool $lower): string
+{
+    $points = [];
+    for ($corner = 0; $corner < 4; $corner++) {
+        $point = "JSON_EXTRACT(r.area_geojson, '$.coordinates[0][$corner][$axis]')";
+        $points[] = $sqlite ? "CAST($point AS REAL)" : '(JSON_UNQUOTE(' . $point . ') + 0e0)';
+    }
+    $aggregate = $sqlite ? ($lower ? 'MIN' : 'MAX') : ($lower ? 'LEAST' : 'GREATEST');
+    return $aggregate . '(' . implode(', ', $points) . ')';
+}
+
+function request_cursor($value): array
+{
+    if (!is_string($value) || !preg_match('/\A(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\|([1-9][0-9]{0,18})\z/', $value, $matches)
+        || filter_var($matches[2], FILTER_VALIDATE_INT) === false) {
+        fail(400, 'cursor の値が不正です');
+    }
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $matches[1]);
+    if (!$date || $date->format('Y-m-d H:i:s') !== $matches[1]) {
+        fail(400, 'cursor の値が不正です');
+    }
+    return [$matches[1], $matches[2]];
+}
+
 function log_event(PDO $db, int $requestId, ?int $assignmentId, int $actorId, string $type, ?string $comment): void
 {
     $stmt = $db->prepare('INSERT INTO review_events (request_id, assignment_id, actor_user_id, event_type, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)');
@@ -413,6 +460,38 @@ function route(PDO $db, array $config, string $method, string $route): void
             $args[] = $category;
         }
         $area = $_GET['area'] ?? '';
+        if (isset($_GET['bbox'])) {
+            if ($area !== '' && $area !== 'located') {
+                fail(400, 'bbox は地域の依頼にのみ指定できます');
+            }
+            $area = 'located';
+            [$west, $south, $east, $north] = request_bbox($_GET['bbox']);
+            $sqlite = $db->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite';
+            // PDO binds execute() values as strings. Cast the bounds explicitly for SQLite.
+            $bound = $sqlite ? 'CAST(? AS REAL)' : '(? + 0e0)';
+            // Valid request rectangles lie between -85 and 85 degrees.
+            if ($south > -85.0 || $north < 85.0) {
+                $minLat = rectangle_edge_sql($sqlite, 1, true);
+                $maxLat = rectangle_edge_sql($sqlite, 1, false);
+                $where[] = "$minLat <= $bound AND $maxLat >= $bound";
+                array_push($args, $north, $south);
+            }
+            if ($west !== -180.0 || $east !== 180.0) {
+                $minLng = rectangle_edge_sql($sqlite, 0, true);
+                $maxLng = rectangle_edge_sql($sqlite, 0, false);
+                $join = $west > $east ? 'OR' : 'AND';
+                $longitude = "($minLng <= $bound $join $maxLng >= $bound)";
+                // The two representations of the dateline are the same edge.
+                if ($west === -180.0) {
+                    $longitude = "($longitude OR $maxLng = 180)";
+                }
+                if ($east === 180.0) {
+                    $longitude = "($longitude OR $minLng = -180)";
+                }
+                $where[] = $longitude;
+                array_push($args, $east, $west);
+            }
+        }
         if ($area === 'worldwide') {
             $where[] = "r.area_geojson = 'null'";
         } elseif ($area === 'located') {
@@ -431,17 +510,45 @@ function route(PDO $db, array $config, string $method, string $route): void
                 $args[] = $me['id'];
             }
         }
+        $paginated = isset($_GET['limit']) || isset($_GET['cursor']);
+        $limit = $paginated ? 30 : 100;
+        if (isset($_GET['limit'])) {
+            $value = $_GET['limit'];
+            if (!is_string($value) || !preg_match('/\A(?:[1-9][0-9]?|100)\z/', $value)) {
+                fail(400, 'limit は1〜100の整数で指定してください');
+            }
+            $limit = (int)$value;
+        }
+        if (isset($_GET['cursor'])) {
+            [$updatedAt, $id] = request_cursor($_GET['cursor']);
+            $where[] = '(r.updated_at < ? OR (r.updated_at = ? AND r.id < ?))';
+            array_push($args, $updatedAt, $updatedAt, $id);
+        }
+        $pageSql = 'SELECT r.* FROM requests r';
+        if ($where) {
+            $pageSql .= ' WHERE ' . implode(' AND ', $where);
+        }
+        $pageSql .= ' ORDER BY r.updated_at DESC, r.id DESC LIMIT ' . ($limit + (int)$paginated);
+        // Count reactions and participants only for the selected page.
         $sql = 'SELECT r.*, u.display_name AS owner_name, u.osm_user_id AS owner_osm_id,
                        (SELECT COUNT(*) FROM assignments a WHERE a.request_id = r.id) AS participant_count,
                        (SELECT COUNT(*) FROM likes rs WHERE rs.request_id = r.id) AS support_count
-                FROM requests r JOIN users u ON u.id = r.user_id';
-        if ($where) {
-            $sql .= ' WHERE ' . implode(' AND ', $where);
-        }
-        $sql .= ' ORDER BY r.updated_at DESC LIMIT 100';
+                FROM (' . $pageSql . ') r JOIN users u ON u.id = r.user_id
+                ORDER BY r.updated_at DESC, r.id DESC';
         $stmt = $db->prepare($sql);
         $stmt->execute($args);
-        out(['requests' => array_map('present_request', $stmt->fetchAll())]);
+        $rows = $stmt->fetchAll();
+        $nextCursor = null;
+        if (count($rows) > $limit) {
+            array_pop($rows);
+            $last = end($rows);
+            $nextCursor = $last['updated_at'] . '|' . $last['id'];
+        }
+        $data = ['requests' => array_map('present_request', $rows)];
+        if ($paginated) {
+            $data['next_cursor'] = $nextCursor;
+        }
+        out($data);
     }
 
     if ($route === '/requests' && $method === 'POST') {

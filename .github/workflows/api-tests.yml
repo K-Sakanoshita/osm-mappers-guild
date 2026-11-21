@@ -22,7 +22,7 @@ jobs:
       - name: Install PHP SQLite support
         run: |
           sudo apt-get update
-          sudo apt-get install -y php-cli php-sqlite3
+          sudo apt-get install -y php-cli php-sqlite3 php-mbstring
       - name: Validate syntax
         run: |
           php -l api/index.php
@@ -31,6 +31,7 @@ jobs:
           node tests/social_draft_test.cjs
           node tests/mypage_test.cjs
           node tests/changeset_picker_test.cjs
+          node tests/request_map_test.cjs
           python3 tests/likes_migration_test.py
       - name: Run PHP API smoke tests
         run: bash tests/run_smoke_test.sh

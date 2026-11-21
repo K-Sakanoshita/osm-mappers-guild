@@ -7,7 +7,7 @@
 <meta name="description" content="「この地域をマッピングしてほしい」という依頼者と、OpenStreetMapを編集するマッパーをつなぐWebサービス。">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.css">
 <link rel="icon" type="image/png" sizes="32x32" href="./favicon.png">
-<link rel="stylesheet" href="./style.css?v=20261119-4">
+<link rel="stylesheet" href="./style.css?v=20261121-1">
 </head>
 <body>
 <header class="app-header">
@@ -45,7 +45,9 @@
       </div>
     </div>
     <h2 id="request-list-heading" class="list-heading">依頼一覧</h2>
-    <div id="request-list" class="request-list" aria-live="polite"></div>
+    <p id="request-list-status" class="hint" role="status">読み込み中…</p>
+    <div id="request-list" class="request-list"></div>
+    <button id="request-list-more" class="btn btn-small" type="button" hidden>さらに読み込む</button>
   </aside>
   <section class="map-wrap">
     <div id="map"></div>
@@ -66,6 +68,6 @@
 
 <script src="https://unpkg.com/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <script src="./config.js?v=20261115-1"></script>
-<script src="./app.js?v=20261119-4"></script>
+<script src="./app.js?v=20261121-1"></script>
 </body>
 </html>

@@ -88,7 +88,7 @@ const map = new maplibregl.Map({
   zoom: 11,
 });
 map.addControl(new maplibregl.NavigationControl(), 'top-right');
-const requestPins = [];
+const rangePickClicks = new WeakSet();
 
 map.on('load', () => {
   map.addSource('pick', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -100,11 +100,19 @@ map.on('load', () => {
     id: 'pick-line', type: 'line', source: 'pick',
     paint: { 'line-color': '#1b5e20', 'line-width': 2 },
   });
+  addRequestLayers();
   loadRequests();
+});
+
+map.on('moveend', () => {
+  if (!state.showWorldwide && map.getSource('request-pins')) {
+    loadRequests({ debounce: true });
+  }
 });
 
 map.on('click', (e) => {
   if (!state.pick.active) return;
+  rangePickClicks.add(e.originalEvent);
   state.pick.corners.push([e.lngLat.lng, e.lngLat.lat]);
   if (state.pick.corners.length === 2) {
     drawPick();
@@ -154,25 +162,94 @@ function finishPicking() {
   map.resize();
 }
 
-function refreshRequestPins(requests) {
-  requestPins.forEach((pin) => pin.remove());
-  requestPins.length = 0;
+function addRequestLayers() {
+  map.addSource('request-pins', {
+    type: 'geojson', data: { type: 'FeatureCollection', features: [] },
+    cluster: true, clusterRadius: 45, clusterMaxZoom: 17,
+  });
+  const cluster = ['has', 'point_count'];
+  map.addLayer({
+    id: 'request-clusters', type: 'circle', source: 'request-pins', filter: cluster,
+    paint: { 'circle-color': '#1565c0', 'circle-radius': 19, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 },
+  });
+  map.addLayer({
+    id: 'request-cluster-count', type: 'symbol', source: 'request-pins', filter: cluster,
+    layout: { 'text-field': ['to-string', ['get', 'point_count_abbreviated']], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-allow-overlap': true },
+    paint: { 'text-color': '#fff' },
+  });
+  map.addLayer({
+    id: 'request-point', type: 'circle', source: 'request-pins', filter: ['!', cluster],
+    paint: { 'circle-color': '#c62828', 'circle-radius': 9, 'circle-stroke-color': '#fff', 'circle-stroke-width': 2 },
+  });
+  for (const layer of ['request-clusters', 'request-point']) {
+    map.on('mouseenter', layer, () => {
+      if (!state.pick.active) map.getCanvas().style.cursor = 'pointer';
+    });
+    map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
+  }
+  map.on('click', 'request-point', (e) => {
+    if (state.pick.active || state.showWorldwide || rangePickClicks.has(e.originalEvent)) return;
+    const ids = new Set(e.features.map((feature) => feature.properties.id));
+    const requests = state.requests.filter((request) => ids.has(request.id));
+    if (requests.length === 1) openDetail(requests[0].id);
+    else if (requests.length > 1) openOverlappingRequests(requests);
+  });
+  map.on('click', 'request-clusters', async (e) => {
+    if (state.pick.active || state.showWorldwide || state.requests.length === 0 || rangePickClicks.has(e.originalEvent)) return;
+    const revision = listRevision;
+    const feature = e.features[0];
+    const [lng, lat] = feature.geometry.coordinates;
+    const center = [lng + 360 * Math.round((e.lngLat.lng - lng) / 360), lat];
+    try {
+      const zoom = await map.getSource('request-pins').getClusterExpansionZoom(feature.properties.cluster_id);
+      if (revision === listRevision && !state.pick.active && !state.showWorldwide) map.easeTo({ center, zoom });
+    } catch {
+      // The source can change while the expansion zoom is being looked up.
+    }
+  });
+}
+
+function wrapLongitude(lng) {
+  return lng >= -180 && lng <= 180 ? lng : ((lng + 180) % 360 + 360) % 360 - 180;
+}
+
+function viewportBbox() {
+  const bounds = map.getBounds();
+  // Round outwards to keep edge intersections and avoid reloads from float noise.
+  const west = Math.floor(bounds.getWest() * 1e6) / 1e6;
+  const east = Math.ceil(bounds.getEast() * 1e6) / 1e6;
+  const south = Math.max(-90, Math.floor(bounds.getSouth() * 1e6) / 1e6);
+  const north = Math.min(90, Math.ceil(bounds.getNorth() * 1e6) / 1e6);
+  if (east - west >= 360) return [-180, south, 180, north];
+  return [wrapLongitude(west).toFixed(6), south, wrapLongitude(east).toFixed(6), north];
+}
+
+function refreshRequestPins(requests, bbox = null) {
+  const source = map.getSource('request-pins');
+  if (!source) return;
+  const viewport = bbox?.split(',').map(Number);
+  const features = [];
   for (const request of requests) {
     const bounds = areaBounds(request.area);
     if (!bounds) continue;
-    const [[west, south], [east, north]] = bounds;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'request-pin';
-    button.textContent = '📌';
-    button.addEventListener('click', () => {
-      if (!state.pick.active) openDetail(request.id);
+    let [[west, south], [east, north]] = bounds;
+    if (viewport) {
+      const [viewWest, viewSouth, viewEast, viewNorth] = viewport;
+      const end = viewEast < viewWest ? viewEast + 360 : viewEast;
+      // Keep the pin on the visible part of a rectangle that overlaps the viewport.
+      const shift = [0, 360, -360].find((offset) => west + offset <= end && east + offset >= viewWest);
+      if (shift === undefined) continue;
+      west = Math.max(west + shift, viewWest);
+      east = Math.min(east + shift, end);
+      south = Math.max(south, viewSouth);
+      north = Math.min(north, viewNorth);
+    }
+    features.push({
+      type: 'Feature', geometry: { type: 'Point', coordinates: [wrapLongitude((west + east) / 2), (south + north) / 2] },
+      properties: { id: request.id },
     });
-    requestPins.push(new maplibregl.Marker({ element: button, anchor: 'bottom' })
-      .setLngLat([(west + east) / 2, (south + north) / 2])
-      .addTo(map));
-    button.setAttribute('aria-label', request.title);
   }
+  source.setData({ type: 'FeatureCollection', features });
 }
 
 function areaBounds(area) {
@@ -191,45 +268,80 @@ function fitToArea(area) {
 // -------------------------------------------------------------------- list
 
 let listRevision = 0;
+let listQuery = '';
+let listCursor = null;
+let listTimer;
+let listBusy = false;
 
-async function loadRequests() {
-  const revision = ++listRevision;
-  const params = new URLSearchParams();
+function loadRequests({ debounce = false } = {}) {
+  if (!state.showWorldwide && !map.getSource('request-pins')) return;
+  const params = new URLSearchParams({ limit: '30', area: state.showWorldwide ? 'worldwide' : 'located' });
   const st = $('filter-status').value;
   const cat = $('filter-category').value;
   if (st) params.set('status', st);
   if (cat) params.set('category', cat);
   if (state.filterMode === 'mine') params.set('owner', 'me');
   if (state.filterMode === 'joining') params.set('participating', 'me');
-  params.set('area', 'located');
-  const locatedRequests = api('/requests?' + params.toString());
-  try {
-    let listRequests = locatedRequests;
-    if (state.showWorldwide) {
-      params.set('area', 'worldwide');
-      listRequests = api('/requests?' + params.toString());
-    }
-    const [located, list] = await Promise.all([locatedRequests, listRequests]);
-    if (revision !== listRevision) return;
-    state.requests = list.requests;
-    renderList();
-    refreshRequestPins(located.requests);
-  } catch (e) {
-    if (revision !== listRevision) return;
-    $('request-list').innerHTML = '<p class="error-text">' + esc(e.message) + '</p>';
-    refreshRequestPins([]);
+  if (!state.showWorldwide) params.set('bbox', viewportBbox().join(','));
+  const query = params.toString();
+  if (debounce && query === listQuery) return;
+  listQuery = query;
+  const revision = ++listRevision;
+  clearTimeout(listTimer);
+  listCursor = null;
+  listBusy = false;
+  state.requests = [];
+  $('request-list').innerHTML = '';
+  refreshRequestPins([]);
+  $('request-list-status').textContent = '読み込み中…';
+  $('request-list-more').hidden = true;
+  if (debounce) {
+    listTimer = setTimeout(() => loadRequestPage(revision), 220);
+  } else {
+    return loadRequestPage(revision);
   }
 }
 
-function renderList() {
-  const el = $('request-list');
-  if (state.requests.length === 0) {
-    el.textContent = state.showWorldwide ? '条件に一致する場所指定なしの依頼はありません。' : '依頼はまだありません。';
-    return;
+async function loadRequestPage(revision) {
+  if (revision !== listRevision || listBusy) return;
+  listBusy = true;
+  const params = new URLSearchParams(listQuery);
+  if (listCursor) params.set('cursor', listCursor);
+  const button = $('request-list-more');
+  const status = $('request-list-status');
+  button.disabled = true;
+  status.textContent = '読み込み中…';
+  try {
+    const page = await api('/requests?' + params.toString());
+    if (revision !== listRevision) return;
+    const ids = new Set(state.requests.map((request) => request.id));
+    const added = page.requests.filter((request) => !ids.has(request.id));
+    state.requests.push(...added);
+    listCursor = page.next_cursor;
+    renderList(added);
+    if (!state.showWorldwide) refreshRequestPins(state.requests, params.get('bbox'));
+    const empty = state.showWorldwide ? '条件に一致する場所指定なしの依頼はありません。' : '地図の表示範囲に条件に一致する依頼はありません。';
+    status.textContent = state.requests.length ? '' : empty;
+    button.textContent = 'さらに読み込む';
+    button.hidden = !listCursor;
+  } catch (e) {
+    if (revision !== listRevision) return;
+    status.textContent = '依頼を取得できませんでした。' + e.message;
+    button.textContent = '再試行';
+    button.hidden = false;
+  } finally {
+    if (revision === listRevision) {
+      listBusy = false;
+      button.disabled = false;
+    }
   }
-  el.innerHTML = state.requests.map((r) => `
-    <article class="request-card" data-id="${r.id}">
-      <h3>${esc(r.title)}</h3>
+}
+
+function renderList(requests) {
+  const el = $('request-list');
+  el.insertAdjacentHTML('beforeend', requests.map((r) => `
+    <article class="request-card" data-id="${Number(r.id)}">
+      <h3><button class="request-title" type="button">${esc(r.title)}</button></h3>
       <div class="meta">
         <span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span>
         <span>${esc(r.category)}</span>
@@ -239,10 +351,7 @@ function renderList() {
         <span>依頼へのいいね ${Number(r.support_count || 0)} 件</span>
       </div>
       <p class="desc">${esc(r.description)}</p>
-    </article>`).join('');
-  el.querySelectorAll('.request-card').forEach((card) => {
-    card.addEventListener('click', () => openDetail(Number(card.dataset.id)));
-  });
+    </article>`).join(''));
 }
 
 // ------------------------------------------------------------------ detail
@@ -260,6 +369,18 @@ function closePanel() {
   state.detail = null;
   state.editingId = null;
   clearPickedArea();
+}
+
+function openOverlappingRequests(requests) {
+  clearPickedArea();
+  state.detail = null;
+  state.editingId = null;
+  openPanel('<h2>この位置の依頼</h2>' + requests.map((request) =>
+    `<button class="mypage-card" type="button" data-request-id="${Number(request.id)}">${esc(request.title)}</button>`
+  ).join(''));
+  $('panel-content').querySelectorAll('[data-request-id]').forEach((button) => {
+    button.addEventListener('click', () => openDetail(Number(button.dataset.requestId)));
+  });
 }
 
 async function openMyPage() {
@@ -284,27 +405,44 @@ async function openMyPage() {
   $('btn-logout').addEventListener('click', logout);
   $('btn-new-request').addEventListener('click', () => openForm(null));
   const sections = [
-    { id: 'mypage-owned', path: '/requests?owner=me', empty: '投稿した依頼はありません。' },
-    { id: 'mypage-joined', path: '/requests?participating=me', empty: '参加した依頼はありません。' },
+    { id: 'mypage-owned', filter: 'owner', empty: '投稿した依頼はありません。' },
+    { id: 'mypage-joined', filter: 'participating', empty: '参加した依頼はありません。' },
   ];
-  await Promise.all(sections.map(async (section) => {
+  await Promise.all(sections.map((section) => loadMyPageRequests(section, revision)));
+}
+
+async function loadMyPageRequests(section, revision) {
+  const container = $(section.id);
+  const params = new URLSearchParams({ [section.filter]: 'me', limit: '30' });
+  let cursor = null;
+  let html = '';
+  async function loadPage() {
+    if (cursor) params.set('cursor', cursor);
+    const button = container.querySelector('.mypage-more');
+    if (button) button.disabled = true;
     try {
-      const data = await api(section.path);
+      const data = await api('/requests?' + params.toString());
       if (revision !== panelRevision || !state.me) return;
-      const container = $(section.id);
-      if (!data.requests.length) { container.innerHTML = '<p class="hint">' + section.empty + '</p>'; return; }
-      container.innerHTML = data.requests.map((r) => `
+      html += data.requests.map((r) => `
         <button class="mypage-card" type="button" data-request-id="${Number(r.id)}">
           <strong>${esc(r.title)}</strong>
           <span class="mypage-card-meta"><span class="badge badge-${esc(r.status)}">${esc(STATUS_LABELS[r.status] || r.status)}</span> ${esc(r.category)}${r.area == null ? ` / ${WORLDWIDE_LABEL}` : ''}</span>
-        </button>`).join('') + (data.requests.length >= 100 ? '<p class="hint">最新の100件を表示しています。</p>' : '');
-      container.querySelectorAll('[data-request-id]').forEach((card) => {
-        card.addEventListener('click', () => openDetail(Number(card.dataset.requestId)));
-      });
+        </button>`).join('');
+      cursor = data.next_cursor;
+      container.innerHTML = html || '<p class="hint">' + section.empty + '</p>';
+      if (cursor) container.innerHTML += '<button class="mypage-more btn btn-small" type="button">さらに読み込む</button>';
     } catch (e) {
-      if (revision === panelRevision && state.me) $(section.id).innerHTML = '<p class="error-text">取得できませんでした: ' + esc(e.message) + '</p>';
+      if (revision !== panelRevision || !state.me) return;
+      container.innerHTML = html + '<p class="error-text">依頼を取得できませんでした。' + esc(e.message)
+        + '</p><button class="mypage-more btn btn-small" type="button">再試行</button>';
     }
-  }));
+  }
+  container.addEventListener('click', (event) => {
+    const card = event.target.closest('[data-request-id]');
+    if (card) openDetail(Number(card.dataset.requestId));
+    else if (event.target.closest('.mypage-more')) loadPage();
+  });
+  await loadPage();
 }
 
 async function openDetail(id) {
@@ -722,6 +860,13 @@ async function logout() {
 }
 $('btn-mypage').addEventListener('click', openMyPage);
 $('panel-close').addEventListener('click', closePanel);
+$('request-list').addEventListener('click', (event) => {
+  const card = event.target.closest('.request-card');
+  if (card) openDetail(Number(card.dataset.id));
+});
+$('request-list-more').addEventListener('click', () => {
+  if (!$('request-list-more').hidden) return loadRequestPage(listRevision);
+});
 $('filter-status').addEventListener('change', loadRequests);
 $('filter-category').addEventListener('change', loadRequests);
 $('filter-worldwide').addEventListener('click', () => {
