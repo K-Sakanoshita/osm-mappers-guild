@@ -62,7 +62,7 @@ with sqlite3.connect(TEST_DIR / "guild.sqlite") as db:
     db.executescript(schema.read_text(encoding="utf-8"))
     db.executemany(
         "INSERT INTO users (id, osm_user_id, display_name, created_at) VALUES (?, ?, ?, datetime('now'))",
-        [(1, 1001, "依頼者A"), (2, 2002, "マッパーB")],
+        [(1, 1001, "依頼者A"), (2, 2002, "マッパーB"), (3, 3003, "マッパーC"), (4, 4004, "マッパーD")],
     )
 db.close()
 
@@ -136,7 +136,8 @@ s, d = call(A, "GET", f"/requests/{req_id}")
 check("invalid reports leave assignment unchanged", d["assignments"][0]["status"] == "joined" and not d["assignments"][0]["changeset_ids"], str(d))
 s, d = call(B, "POST", f"/requests/{req_id}/report",
             {"comment": "駅前の店舗3件を確認・更新しました", "changeset_ids": [123456, 123457]}, csrfB)
-check("B report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
+check("B report", s == 200 and d["request"]["status"] == "in_progress"
+      and d["request"]["reported_count"] == 1 and d["request"]["has_pending_reports"] is True, str(d))
 s, d = call(B, "POST", f"/requests/{req_id}/report", {"comment": "再報告", "changeset_ids": []}, csrfB)
 check("B double report -> 409", s == 409, str(s))
 
@@ -148,13 +149,18 @@ aid = d["assignments"][0]["id"]
 check("detail has changesets", d["assignments"][0]["changeset_ids"] == [123456, 123457], str(d["assignments"]))
 s, d = call(A, "POST", f"/requests/{req_id}/review",
             {"assignment_id": aid, "action": "request_changes", "comment": "西側の店舗もお願いします"}, csrfA)
-check("A request_changes", s == 200 and d["request"]["status"] == "changes_requested", str(d))
+check("A request_changes", s == 200 and d["request"]["status"] == "in_progress"
+      and d["request"]["changes_requested_count"] == 1, str(d))
 s, d = call(B, "POST", f"/requests/{req_id}/report",
             {"comment": "西側も確認しました", "changeset_ids": [123999]}, csrfB)
-check("B re-report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
+check("B re-report", s == 200 and d["request"]["status"] == "in_progress", str(d))
 s, d = call(A, "POST", f"/requests/{req_id}/review",
             {"assignment_id": aid, "action": "approve", "comment": "ありがとうございました"}, csrfA)
-check("A approve -> completed", s == 200 and d["request"]["status"] == "completed", str(d))
+check("A approve -> in_progress", s == 200 and d["request"]["status"] == "in_progress"
+      and d["request"]["all_approved"] is True, str(d))
+s, d = call(A, "POST", f"/requests/{req_id}/complete", {}, csrfA)
+check("A complete -> completed", s == 200 and d["request"]["status"] == "completed"
+      and d["pending_participants"]["count"] == 0, str(d))
 
 # --- 詳細・一覧・認可
 s, d = call(anon, "GET", f"/requests/{req_id}")
@@ -170,12 +176,12 @@ check("owner cannot join twice", s == 409, str(d))
 s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": []}, csrfA)
 check("owner report requires changeset", s == 400, str(d))
 s, d = call(A, "POST", f"/requests/{req2_id}/report", {"comment": "建物を編集", "changeset_ids": [123456]}, csrfA)
-check("owner can report", s == 200 and d["request"]["status"] == "awaiting_review", str(d))
+check("owner can report", s == 200 and d["request"]["status"] == "in_progress", str(d))
 s, d = call(A, "GET", f"/requests/{req2_id}")
 owner_assignment = next(a for a in d["assignments"] if a["user_osm_id"] == 1001)
 check("owner report saves changeset", owner_assignment["changeset_ids"] == [123456], str(owner_assignment))
 s, d = call(A, "POST", f"/requests/{req2_id}/review", {"assignment_id": owner_assignment["id"], "action": "approve"}, csrfA)
-check("owner can approve own report", s == 200, str(d))
+check("owner cannot approve own report -> 409", s == 409, str(d))
 
 s, d = call(B, "PATCH", f"/requests/{req2_id}", {"title": "乗っ取り"}, csrfB)
 check("non-owner edit -> 403", s == 403, str(s))
@@ -377,6 +383,112 @@ s, d = get_requests({"area": "worldwide", "category": "その他", "limit": 1})
 check("worldwide page contains worldwide requests only",
       s == 200 and d["next_cursor"] and [r["id"] for r in d["requests"]] == [250]
       and d["requests"][0]["area"] is None, str(d)[:200])
+
+# --- ピース1b: complete エンドポイント
+C = authenticated_client(3)
+s, d = call(C, "GET", "/me"); csrfC = d["csrf_token"]
+check("me C", d["user"]["osm_user_id"] == 3003, str(d))
+D = authenticated_client(4)
+s, d = call(D, "GET", "/me"); csrfD = d["csrf_token"]
+check("me D", d["user"]["osm_user_id"] == 4004, str(d))
+
+# --- 完了フロー（req3）
+s, d = call(A, "POST", "/requests", {
+    "title": "完了フローテスト", "description": "x", "category": "店舗・施設", "area": RECT}, csrfA)
+req3_id = d["request"]["id"]
+check("create req3", s == 201 and d["request"]["status"] == "open", str(d))
+s, d = call(B, "POST", f"/requests/{req3_id}/join", {}, csrfB)
+check("req3: 参加者Aが参加", s == 200 and d["request"]["status"] == "in_progress", str(d))
+s, d = call(C, "POST", f"/requests/{req3_id}/join", {}, csrfC)
+check("req3: 参加者Bが参加", s == 200 and d["request"]["status"] == "in_progress", str(d))
+s, d = call(B, "POST", f"/requests/{req3_id}/report", {"comment": "A報告", "changeset_ids": [11]}, csrfB)
+check("req3: Aが報告 -> in_progressのまま", s == 200 and d["request"]["status"] == "in_progress"
+      and d["request"]["reported_count"] == 1 and d["request"]["has_pending_reports"] is True, str(d["request"]))
+s, d = call(C, "POST", f"/requests/{req3_id}/report", {"comment": "B報告", "changeset_ids": [12]}, csrfC)
+check("req3: Bも報告できる", s == 200 and d["request"]["reported_count"] == 2, str(d["request"]))
+s, d = call(D, "POST", f"/requests/{req3_id}/join", {}, csrfD)
+check("req3: 新規参加者Cも参加できる", s == 200 and d["request"]["status"] == "in_progress", str(d))
+s, d = call(D, "POST", f"/requests/{req3_id}/leave", {}, csrfD)
+check("req3: 新規参加者は離脱できる", s == 200 and d["request"]["status"] == "in_progress", str(d))
+s, d = call(A, "GET", f"/requests/{req3_id}")
+r3_a = next(x["id"] for x in d["assignments"] if x["user_osm_id"] == 2002)
+r3_b = next(x["id"] for x in d["assignments"] if x["user_osm_id"] == 3003)
+s, d = call(A, "POST", f"/requests/{req3_id}/review", {"assignment_id": r3_a, "action": "approve"}, csrfA)
+check("req3: Aを承認 -> in_progressのまま", s == 200 and d["request"]["status"] == "in_progress", str(d["request"]))
+s, d = call(A, "POST", f"/requests/{req3_id}/review", {"assignment_id": r3_b, "action": "approve"}, csrfA)
+check("req3: Bを承認 -> in_progress、all_approved", s == 200 and d["request"]["status"] == "in_progress"
+      and d["request"]["all_approved"] is True, str(d["request"]))
+s, d = call(D, "POST", f"/requests/{req3_id}/complete", {}, csrfD)
+check("req3: 非依頼者のcomplete -> 403", s == 403, str(s))
+s, d = call(A, "POST", f"/requests/{req3_id}/complete", {}, csrfA)
+check("req3: 依頼者がcomplete -> completed", s == 200 and d["request"]["status"] == "completed"
+      and d["pending_participants"]["count"] == 0, str(d))
+s, d = call(D, "POST", f"/requests/{req3_id}/join", {}, csrfD)
+check("req3: 完了後のjoin -> 409", s == 409, str(s))
+s, d = call(B, "POST", f"/requests/{req3_id}/report", {"comment": "遅い報告", "changeset_ids": [13]}, csrfB)
+check("req3: 完了後のreport -> 409", s == 409, str(s))
+s, d = call(A, "POST", f"/requests/{req3_id}/complete", {}, csrfA)
+check("req3: complete 2回 -> 409", s == 409, str(s))
+
+# --- 修正依頼ループと未報告者残りのcomplete（req4）
+s, d = call(A, "POST", "/requests", {
+    "title": "ループテスト", "description": "x", "category": "店舗・施設", "area": RECT}, csrfA)
+req4_id = d["request"]["id"]
+check("create req4", s == 201, str(d))
+s, d = call(B, "POST", f"/requests/{req4_id}/join", {}, csrfB)
+s, d = call(C, "POST", f"/requests/{req4_id}/join", {}, csrfC)
+s, d = call(B, "POST", f"/requests/{req4_id}/report", {"comment": "A報告", "changeset_ids": [21]}, csrfB)
+s, d = call(C, "POST", f"/requests/{req4_id}/report", {"comment": "B報告", "changeset_ids": [22]}, csrfC)
+s, d = call(A, "GET", f"/requests/{req4_id}")
+r4_a = next(x["id"] for x in d["assignments"] if x["user_osm_id"] == 2002)
+r4_b = next(x["id"] for x in d["assignments"] if x["user_osm_id"] == 3003)
+s, d = call(A, "POST", f"/requests/{req4_id}/review",
+            {"assignment_id": r4_a, "action": "request_changes", "comment": "もう少し追加してください"}, csrfA)
+check("req4: 修正依頼", s == 200, str(d))
+s, d = call(C, "GET", f"/requests/{req4_id}")
+check("req4: 修正依頼は他の参加者に影響しない",
+      s == 200 and next(x for x in d["assignments"] if x["user_osm_id"] == 3003)["status"] == "reported",
+      str(d["assignments"]))
+s, d = call(B, "POST", f"/requests/{req4_id}/report", {"comment": "再報告", "changeset_ids": [23]}, csrfB)
+check("req4: 再報告", s == 200, str(d))
+s, d = call(A, "POST", f"/requests/{req4_id}/review", {"assignment_id": r4_a, "action": "approve"}, csrfA)
+s, d = call(C, "GET", f"/requests/{req4_id}")
+check("req4: 再承認、他の参加者はreportedのまま",
+      s == 200 and next(x for x in d["assignments"] if x["user_osm_id"] == 3003)["status"] == "reported",
+      str(d["assignments"]))
+s, d = call(A, "POST", f"/requests/{req4_id}/complete", {}, csrfA)
+check("req4: 未報告者残りでcompleteできる", s == 200 and d["request"]["status"] == "completed", str(d))
+check("req4: pending_participantsに未報告者が含まれる",
+      d["pending_participants"] == {"count": 1, "participants": [{"user_id": 3, "display_name": "マッパーC", "status": "reported"}]},
+      str(d["pending_participants"]))
+
+# --- 参加受付締め切り（close-registration、req5）
+s, d = call(A, "POST", "/requests", {
+    "title": "締め切りテスト", "description": "参加受付の締め切りを確認", "category": "建物", "area": RECT}, csrfA)
+req5_id = d["request"]["id"]
+check("create req5", s == 201 and d["request"]["registration_closed"] is False, str(d))
+s, d = call(B, "POST", f"/requests/{req5_id}/join", {}, csrfB)
+check("req5: 締め切り前のjoin", s == 200 and d["request"]["status"] == "in_progress", str(d))
+s, d = call(A, "POST", f"/requests/{req5_id}/close-registration", {}, csrfA)
+check("req5: 依頼者のclose-registration -> 200、registration_closed が true、状態は不変",
+      s == 200 and d["request"]["registration_closed"] is True and d["request"]["status"] == "in_progress",
+      str(d["request"]))
+s, d = call(C, "POST", f"/requests/{req5_id}/close-registration", {}, csrfC)
+check("req5: 依頼者以外のclose-registration -> 403", s == 403, str(s))
+s, d = call(C, "POST", f"/requests/{req5_id}/join", {}, csrfC)
+check("req5: 締め切り後のjoin -> 409（参加受付は締め切られました）",
+      s == 409 and d.get("error") == "参加受付は締め切られました", str(d))
+s, d = call(B, "POST", f"/requests/{req5_id}/report", {"comment": "締め切り後の報告", "changeset_ids": [41]}, csrfB)
+check("req5: 締め切り後も既存参加者はreportできる", s == 200, str(d))
+s, d = call(A, "POST", f"/requests/{req5_id}/close-registration", {}, csrfA)
+check("req5: close-registration 2回目 -> 200（冪等）",
+      s == 200 and d["request"]["registration_closed"] is True, str(d["request"]))
+
+# --- 取り下げ済み依頼: report / complete は409
+s, d = call(B, "POST", f"/requests/{req2_id}/report", {"comment": "遅い報告", "changeset_ids": [31]}, csrfB)
+check("withdrawn: report -> 409", s == 409, str(s))
+s, d = call(A, "POST", f"/requests/{req2_id}/complete", {}, csrfA)
+check("withdrawn: complete -> 409", s == 409, str(s))
 
 print(f"\n{passed} passed, {failed} failed")
 sys.exit(1 if failed else 0)

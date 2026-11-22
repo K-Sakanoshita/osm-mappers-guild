@@ -14,8 +14,8 @@ const STATUS_LABELS = {
   withdrawn: '取り下げ',
 };
 const ASSIGNMENT_LABELS = {
-  joined: '参加中',
-  reported: '報告済み',
+  joined: '作業中',
+  reported: '確認待ち',
   changes_requested: '修正依頼',
   approved: '承認済み',
 };
@@ -347,7 +347,9 @@ function renderList(requests) {
         <span>${esc(r.category)}</span>
         ${r.area == null ? `<span>${WORLDWIDE_LABEL}</span>` : ''}
         <span>依頼者: ${esc(r.owner_name)}</span>
-        <span>参加 ${r.participant_count} 人</span>
+        <span>参加 ${Number(r.participant_count || 0)} 人</span>
+        ${Number(r.reported_count || 0) >= 1 ? `<span class="badge badge-awaiting_review">確認待ち ${Number(r.reported_count)} 件</span>` : ''}
+        ${Number(r.approved_count || 0) >= 1 ? `<span class="badge badge-approved">承認済み ${Number(r.approved_count)} 名</span>` : ''}
         <span>依頼へのいいね ${Number(r.support_count || 0)} 件</span>
       </div>
       <p class="desc">${esc(r.description)}</p>
@@ -489,8 +491,12 @@ function renderDetail() {
       <span>${esc(r.category)}</span>
       ${r.area == null ? `<span>${WORLDWIDE_LABEL}</span>` : ''}
       <span>依頼者: ${esc(r.owner_name)}</span>
+      <span>参加 ${Number(r.participant_count || 0)} 人</span>
+      ${Number(r.reported_count || 0) >= 1 ? `<span class="badge badge-awaiting_review">確認待ち ${Number(r.reported_count)} 件</span>` : ''}
+      ${Number(r.approved_count || 0) >= 1 ? `<span class="badge badge-approved">承認済み ${Number(r.approved_count)} 名</span>` : ''}
       <span>更新: ${esc(r.updated_at)}</span>
     </div>
+    ${r.registration_closed ? '<p class="hint">参加受付は締め切られています</p>' : ''}
     <p>${esc(r.description)}</p>
     <p class="social-stat">依頼へのいいね <span id="support-count">${Number(r.support_count || 0)}</span> 件</p>
     ${r.reward_text ? `<p><strong>報酬・謝礼:</strong> ${esc(r.reward_text)}<br>
@@ -544,7 +550,16 @@ function renderDetail() {
       btns += '<button id="act-edit" class="btn" type="button">編集</button>';
       btns += '<button id="act-withdraw" class="btn btn-danger" type="button">取り下げ</button>';
     }
-    if (!myAssignment && !['completed', 'withdrawn'].includes(r.status)) {
+    if (isOwner && ['open', 'in_progress'].includes(r.status)) {
+      btns += '<button id="act-complete" class="btn btn-primary" type="button">依頼を完了にする</button>';
+      if (r.status === 'in_progress' && r.all_approved) {
+        btns += '<p class="hint">全員の報告が承認済みです。完了にできます。</p>';
+      }
+    }
+    if (isOwner && !r.registration_closed && ['open', 'in_progress'].includes(r.status)) {
+      btns += '<button id="act-close-reg" class="btn" type="button">参加受付を締め切る</button>';
+    }
+    if (!myAssignment && !r.registration_closed && !['completed', 'withdrawn'].includes(r.status)) {
       btns += '<button id="act-join" class="btn btn-primary" type="button">参加する</button>';
     } else if (myAssignment && ['joined', 'changes_requested'].includes(myAssignment.status)) {
       btns += '<button id="act-leave" class="btn" type="button">参加を解除</button>';
@@ -559,6 +574,14 @@ function renderDetail() {
   on('act-join', async () => { await mutate('/requests/' + r.id + '/join'); });
   on('act-leave', async () => { if (confirm('参加を解除しますか？')) await mutate('/requests/' + r.id + '/leave'); });
   on('act-withdraw', async () => { if (confirm('この依頼を取り下げますか？')) await mutate('/requests/' + r.id + '/withdraw'); });
+  on('act-complete', async () => {
+    const pending = Number(r.working_count || 0) + Number(r.changes_requested_count || 0) + Number(r.reported_count || 0);
+    if (pending > 0 && !confirm(`未報告・未承認の参加者が ${pending} 名います。完了にしますか？`)) return;
+    await mutate('/requests/' + r.id + '/complete');
+  });
+  on('act-close-reg', async () => {
+    if (confirm('参加受付を締め切りますか？')) await mutate('/requests/' + r.id + '/close-registration');
+  });
   on('act-edit', () => openForm(r));
   on('act-support', async () => {
     const button = $('act-support');

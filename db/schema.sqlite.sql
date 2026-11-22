@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS requests (
   reward_text  TEXT,
   area_geojson TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'open',
+  registration_closed INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
 );

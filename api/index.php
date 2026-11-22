@@ -228,29 +228,18 @@ function log_event(PDO $db, int $requestId, ?int $assignmentId, int $actorId, st
     $stmt->execute([$requestId, $assignmentId, $actorId, $type, $comment, now()]);
 }
 
-/** 参加状況から依頼ステータスを再計算する（取り下げは維持）。 */
+/** 参加状況から依頼ステータスを再計算する（completed と withdrawn は維持）。 */
 function recompute_status(PDO $db, int $requestId): void
 {
     $stmt = $db->prepare('SELECT status FROM requests WHERE id = ?');
     $stmt->execute([$requestId]);
     $req = $stmt->fetch();
-    if (!$req || $req['status'] === 'withdrawn') {
+    if (!$req || in_array($req['status'], ['completed', 'withdrawn'], true)) {
         return;
     }
-    $stmt = $db->prepare('SELECT status FROM assignments WHERE request_id = ?');
+    $stmt = $db->prepare('SELECT COUNT(*) FROM assignments WHERE request_id = ?');
     $stmt->execute([$requestId]);
-    $statuses = array_column($stmt->fetchAll(), 'status');
-    if (in_array('reported', $statuses, true)) {
-        $next = 'awaiting_review';
-    } elseif (in_array('approved', $statuses, true)) {
-        $next = 'completed';
-    } elseif (in_array('changes_requested', $statuses, true)) {
-        $next = 'changes_requested';
-    } elseif (in_array('joined', $statuses, true)) {
-        $next = 'in_progress';
-    } else {
-        $next = 'open';
-    }
+    $next = ((int)$stmt->fetchColumn()) > 0 ? 'in_progress' : 'open';
     $stmt = $db->prepare('UPDATE requests SET status = ?, updated_at = ? WHERE id = ?');
     $stmt->execute([$next, now(), $requestId]);
 }
@@ -267,7 +256,35 @@ function fetch_request(PDO $db, int $id): ?array
     return $row ?: null;
 }
 
-function present_request(array $row): array
+/** 1件の依頼の assignments を状態別に集計する。 */
+function request_assignment_counts(PDO $db, int $requestId): array
+{
+    $stmt = $db->prepare('SELECT status, COUNT(*) AS n FROM assignments WHERE request_id = ? GROUP BY status');
+    $stmt->execute([$requestId]);
+    $counts = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $counts[$row['status']] = (int)$row['n'];
+    }
+    return $counts;
+}
+
+/** 複数の依頼の assignments を1クエリで状態別に集計する。 */
+function list_assignment_counts(PDO $db, array $requestIds): array
+{
+    $out = [];
+    if ($requestIds === []) {
+        return $out;
+    }
+    $ph = implode(',', array_fill(0, count($requestIds), '?'));
+    $stmt = $db->prepare("SELECT request_id, status, COUNT(*) AS n FROM assignments WHERE request_id IN ($ph) GROUP BY request_id, status");
+    $stmt->execute($requestIds);
+    foreach ($stmt->fetchAll() as $row) {
+        $out[(int)$row['request_id']][$row['status']] = (int)$row['n'];
+    }
+    return $out;
+}
+
+function present_request(array $row, array $counts = []): array
 {
     $row['area'] = json_decode($row['area_geojson'], true);
     unset($row['area_geojson']);
@@ -280,6 +297,22 @@ function present_request(array $row): array
     if (isset($row['support_count'])) {
         $row['support_count'] = (int)$row['support_count'];
     }
+    $reported = (int)($counts['reported'] ?? 0);
+    $approved = (int)($counts['approved'] ?? 0);
+    $changes = (int)($counts['changes_requested'] ?? 0);
+    $joined = (int)($counts['joined'] ?? 0);
+    $row['reported_count'] = $reported;
+    $row['approved_count'] = $approved;
+    $row['working_count'] = $joined + $changes;
+    $row['changes_requested_count'] = $changes;
+    $row['has_pending_reports'] = $reported > 0;
+    if (isset($row['registration_closed'])) {
+        $row['registration_closed'] = (bool)(int)$row['registration_closed'];
+    }
+    $participants = isset($row['participant_count'])
+        ? $row['participant_count']
+        : $joined + $reported + $changes + $approved;
+    $row['all_approved'] = $participants > 0 && $approved === $participants;
     return $row;
 }
 
@@ -448,8 +481,13 @@ function route(PDO $db, array $config, string $method, string $route): void
             if (!in_array($status, REQUEST_STATUSES, true)) {
                 fail(400, 'status の値が不正です');
             }
-            $where[] = 'r.status = ?';
-            $args[] = $status;
+            if ($status === 'awaiting_review') {
+                // awaiting_review は仮想フィルタ: 未確認の報告（reported）が1件以上ある依頼を返す。
+                $where[] = "EXISTS (SELECT 1 FROM assignments a WHERE a.request_id = r.id AND a.status = 'reported')";
+            } else {
+                $where[] = 'r.status = ?';
+                $args[] = $status;
+            }
         }
         $category = $_GET['category'] ?? '';
         if (is_string($category) && $category !== '') {
@@ -544,7 +582,8 @@ function route(PDO $db, array $config, string $method, string $route): void
             $last = end($rows);
             $nextCursor = $last['updated_at'] . '|' . $last['id'];
         }
-        $data = ['requests' => array_map('present_request', $rows)];
+        $countsByRequest = list_assignment_counts($db, array_map(fn($r) => (int)$r['id'], $rows));
+        $data = ['requests' => array_map(fn($r) => present_request($r, $countsByRequest[(int)$r['id']] ?? []), $rows)];
         if ($paginated) {
             $data['next_cursor'] = $nextCursor;
         }
@@ -631,7 +670,7 @@ function route(PDO $db, array $config, string $method, string $route): void
                 $supportedByMe = (bool)$supportStmt->fetchColumn();
             }
             out([
-                'request' => present_request($req),
+                'request' => present_request($req, request_assignment_counts($db, $id)),
                 'assignments' => $assignments,
                 'events' => $events,
                 'supported_by_me' => $supportedByMe,
@@ -697,7 +736,7 @@ function route(PDO $db, array $config, string $method, string $route): void
             $stmt = $db->prepare('UPDATE requests SET ' . implode(', ', $fields) . ' WHERE id = ?');
             $stmt->execute($args);
             log_event($db, $id, null, (int)$me['id'], 'edit', null);
-            out(['request' => present_request(fetch_request($db, $id))]);
+            out(['request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
         }
     }
 
@@ -770,7 +809,30 @@ function route(PDO $db, array $config, string $method, string $route): void
         out(['like_count' => (int)$stmt->fetchColumn(), 'liked_by_me' => $b['active']]);
     }
 
-    if (preg_match('#^/requests/(\d+)/(withdraw|join|leave|report|review)$#', $route, $m) && $method === 'POST') {
+    // 参加受付の締め切り（依頼者のみ。冪等。status は変更しない）
+    if (preg_match('#^/requests/(\d+)/close-registration$#', $route, $m) && $method === 'POST') {
+        $me = require_login($db);
+        require_csrf();
+        $id = (int)$m[1];
+        $req = fetch_request($db, $id);
+        if (!$req) {
+            fail(404, '依頼が見つかりません');
+        }
+        if ((int)$req['user_id'] !== (int)$me['id']) {
+            fail(403, '依頼者のみ参加受付を締め切れます');
+        }
+        if (in_array($req['status'], ['completed', 'withdrawn'], true)) {
+            fail(409, $req['status'] === 'withdrawn' ? '取り下げ済みの依頼は参加受付を締め切れません' : '完了済みの依頼は参加受付を締め切れません');
+        }
+        if (!(int)$req['registration_closed']) {
+            $stmt = $db->prepare('UPDATE requests SET registration_closed = 1, updated_at = ? WHERE id = ?');
+            $stmt->execute([now(), $id]);
+            log_event($db, $id, null, (int)$me['id'], 'registration_closed', null);
+        }
+        out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
+    }
+
+    if (preg_match('#^/requests/(\d+)/(withdraw|join|leave|report|review|complete)$#', $route, $m) && $method === 'POST') {
         $id = (int)$m[1];
         $action = $m[2];
         $me = require_login($db);
@@ -796,12 +858,15 @@ function route(PDO $db, array $config, string $method, string $route): void
             $stmt = $db->prepare('UPDATE requests SET status = ?, updated_at = ? WHERE id = ?');
             $stmt->execute(['withdrawn', now(), $id]);
             log_event($db, $id, null, (int)$me['id'], 'withdraw', null);
-            out(['request' => present_request(fetch_request($db, $id))]);
+            out(['request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
         }
 
         if ($action === 'join') {
             if (in_array($req['status'], ['completed', 'withdrawn'], true)) {
                 fail(409, 'この依頼は参加を受け付けていません');
+            }
+            if ((int)($req['registration_closed'] ?? 0) === 1) {
+                fail(409, '参加受付は締め切られました');
             }
             if ($myAssignment) {
                 fail(409, 'すでに参加しています');
@@ -811,7 +876,7 @@ function route(PDO $db, array $config, string $method, string $route): void
             $assignmentId = (int)$db->lastInsertId();
             log_event($db, $id, $assignmentId, (int)$me['id'], 'join', null);
             recompute_status($db, $id);
-            out(['ok' => true, 'request' => present_request(fetch_request($db, $id))]);
+            out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
         }
 
         if ($action === 'leave') {
@@ -827,15 +892,15 @@ function route(PDO $db, array $config, string $method, string $route): void
             $stmt->execute([$myAssignment['id']]);
             log_event($db, $id, null, (int)$me['id'], 'leave', null);
             recompute_status($db, $id);
-            out(['ok' => true, 'request' => present_request(fetch_request($db, $id))]);
+            out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
         }
 
         if ($action === 'report') {
             if (!$myAssignment) {
                 fail(403, '参加しているマッパーのみ報告できます');
             }
-            if ($req['status'] === 'withdrawn') {
-                fail(409, '取り下げ済みの依頼には報告できません');
+            if (in_array($req['status'], ['withdrawn', 'completed'], true)) {
+                fail(409, $req['status'] === 'withdrawn' ? '取り下げ済みの依頼には報告できません' : '完了済みの依頼には報告できません');
             }
             if (!in_array($myAssignment['status'], ['joined', 'changes_requested'], true)) {
                 fail(409, 'この参加はすでに報告済みです');
@@ -872,7 +937,7 @@ function route(PDO $db, array $config, string $method, string $route): void
                 $db->rollBack();
                 throw $e;
             }
-            out(['ok' => true, 'request' => present_request(fetch_request($db, $id))]);
+            out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
         }
 
         if ($action === 'review') {
@@ -895,6 +960,9 @@ function route(PDO $db, array $config, string $method, string $route): void
             if (!$target) {
                 fail(404, '対象の参加が見つかりません');
             }
+            if ((int)$target['user_id'] === (int)$me['id']) {
+                fail(409, '自分の成果は承認できません');
+            }
             if ($target['status'] !== 'reported') {
                 fail(409, '報告済みの参加のみ確認できます');
             }
@@ -903,7 +971,31 @@ function route(PDO $db, array $config, string $method, string $route): void
             $stmt->execute([$next, now(), $target['id']]);
             log_event($db, $id, (int)$target['id'], (int)$me['id'], $act, $comment !== null ? trim($comment) : null);
             recompute_status($db, $id);
-            out(['ok' => true, 'request' => present_request(fetch_request($db, $id))]);
+            out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id))]);
+        }
+
+        if ($action === 'complete') {
+            if (!$isOwner) {
+                fail(403, '依頼者のみ完了にできます');
+            }
+            if (in_array($req['status'], ['completed', 'withdrawn'], true)) {
+                fail(409, $req['status'] === 'withdrawn' ? '取り下げ済みの依頼は完了にできません' : 'すでに完了済みです');
+            }
+            $stmt = $db->prepare('UPDATE requests SET status = ?, updated_at = ? WHERE id = ?');
+            $stmt->execute(['completed', now(), $id]);
+            log_event($db, $id, null, (int)$me['id'], 'complete', null);
+            $stmt = $db->prepare(
+                "SELECT a.user_id, a.status, u.display_name
+                 FROM assignments a JOIN users u ON u.id = a.user_id
+                 WHERE a.request_id = ? AND a.status IN ('joined', 'changes_requested', 'reported')
+                 ORDER BY a.id"
+            );
+            $stmt->execute([$id]);
+            $pending = [];
+            foreach ($stmt->fetchAll() as $row) {
+                $pending[] = ['user_id' => (int)$row['user_id'], 'display_name' => $row['display_name'], 'status' => $row['status']];
+            }
+            out(['ok' => true, 'request' => present_request(fetch_request($db, $id), request_assignment_counts($db, $id)), 'pending_participants' => ['count' => count($pending), 'participants' => $pending]]);
         }
     }
 

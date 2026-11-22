@@ -12,8 +12,10 @@ function el(id) {
   };
 }
 const map = { on() {}, addControl() {}, getSource() {}, resize() {}, fitBounds() {} };
-let mode = 'success', requestedUrl = '', sentBody = null;
+let mode = 'success', requestedUrl = '', postUrl = '', postHeaders = null, sentBody = null;
+let confirmMsg = null, confirmResult = true;
 const context = {
+  confirm: (msg) => { confirmMsg = msg; return confirmResult; },
   document: { addEventListener() {}, getElementById: el, querySelectorAll: () => [], body: { classList: { add() {}, remove() {} } } },
   window: {}, maplibregl: { Map: function () { return map; }, NavigationControl: function () {} },
   URLSearchParams, setTimeout() {}, console,
@@ -27,7 +29,7 @@ const context = {
         { id: 44, changes_count: 0 },
       ] }) };
     }
-    if (opts.method === 'POST') { sentBody = JSON.parse(opts.body); throw new Error('stop after submission'); }
+    if (opts.method === 'POST') { postUrl = url; postHeaders = opts.headers; sentBody = JSON.parse(opts.body); throw new Error('stop after submission'); }
     return { ok: true, json: async () => ({ user: null, categories: [], requests: [] }) };
   },
 };
@@ -78,5 +80,32 @@ vm.runInContext(fs.readFileSync('frontend/app.js', 'utf8'), context);
   assert.equal(worldwideUrl.searchParams.get('user'), '99');
   assert.equal(worldwideUrl.searchParams.has('bbox'), false);
   assert.match(el('report-changeset-list').innerHTML, /#42/);
+
+  // 完了ボタン: 表示条件と complete 呼び出し
+  vm.runInContext(`state.me = {id: 2}; state.detail.request = {id: 3, user_id: 1, status: 'open'}; state.detail.assignments = []; renderDetail()`, context);
+  assert.doesNotMatch(el('detail-actions').innerHTML, /act-complete/);
+  vm.runInContext('state.me = {id: 1}; renderDetail()', context);
+  assert.match(el('detail-actions').innerHTML, /act-complete/);
+  vm.runInContext("state.detail.request.status = 'completed'; renderDetail()", context);
+  assert.doesNotMatch(el('detail-actions').innerHTML, /act-complete/);
+  vm.runInContext("state.detail.request = {id: 3, user_id: 1, status: 'in_progress', all_approved: true}; renderDetail()", context);
+  assert.match(el('detail-actions').innerHTML, /全員の報告が承認済みです。完了にできます。/);
+  vm.runInContext('state.detail.request.all_approved = false; renderDetail()', context);
+  confirmMsg = null; postUrl = '';
+  await el('act-complete').click();
+  assert.equal(confirmMsg, null);
+  assert.match(postUrl, /\/requests\/3\/complete$/);
+  assert.deepEqual(sentBody, {});
+  assert.equal(postHeaders['X-CSRF-Token'], vm.runInContext('state.csrf', context));
+  vm.runInContext(`state.detail.request = {id: 3, user_id: 1, status: 'in_progress', working_count: 1, changes_requested_count: 0, reported_count: 1}; renderDetail()`, context);
+  confirmResult = false; confirmMsg = null; postUrl = '';
+  await el('act-complete').click();
+  assert.match(confirmMsg, /未報告・未承認の参加者が 2 名います。完了にしますか？/);
+  assert.equal(postUrl, '');
+  confirmResult = true; confirmMsg = null; postUrl = '';
+  await el('act-complete').click();
+  assert.match(confirmMsg, /未報告・未承認の参加者が 2 名います。/);
+  assert.match(postUrl, /\/requests\/3\/complete$/);
   console.log('Changeset の検索条件、選択、送信、空結果、取得失敗: OK');
+  console.log('完了ボタンの表示条件、確認ダイアログ、complete 呼び出し: OK');
 })().catch((error) => { console.error(error); process.exitCode = 1; });
